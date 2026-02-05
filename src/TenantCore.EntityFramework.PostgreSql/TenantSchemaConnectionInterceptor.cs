@@ -2,6 +2,7 @@ using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
+using TenantCore.EntityFramework.PostgreSql.Utilities;
 
 namespace TenantCore.EntityFramework.PostgreSql;
 
@@ -74,6 +75,6 @@ public class TenantSchemaConnectionInterceptor<TKey> : DbConnectionInterceptor
 
     private static string EscapeIdentifier(string identifier)
     {
-        return identifier.Replace("\"", "\"\"");
+        return PostgreSqlIdentifierHelper.EscapeIdentifier(identifier);
     }
 }

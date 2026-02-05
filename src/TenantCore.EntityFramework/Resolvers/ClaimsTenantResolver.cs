@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using TenantCore.EntityFramework.Abstractions;
+using TenantCore.EntityFramework.Utilities;
 
 namespace TenantCore.EntityFramework.Resolvers;
 
@@ -60,7 +61,7 @@ public class ClaimsTenantResolver<TKey> : ITenantResolver<TKey> where TKey : not
 
         try
         {
-            var tenantId = _parser != null ? _parser(claim.Value) : ParseTenantId(claim.Value);
+            var tenantId = _parser != null ? _parser(claim.Value) : TenantKeyParser<TKey>.Parse(claim.Value);
             return Task.FromResult<TKey?>(tenantId);
         }
         catch
@@ -69,22 +70,4 @@ public class ClaimsTenantResolver<TKey> : ITenantResolver<TKey> where TKey : not
         }
     }
 
-    private static TKey ParseTenantId(string value)
-    {
-        var type = typeof(TKey);
-
-        if (type == typeof(string))
-            return (TKey)(object)value;
-
-        if (type == typeof(Guid))
-            return (TKey)(object)Guid.Parse(value);
-
-        if (type == typeof(int))
-            return (TKey)(object)int.Parse(value);
-
-        if (type == typeof(long))
-            return (TKey)(object)long.Parse(value);
-
-        throw new NotSupportedException($"Tenant key type {type.Name} is not supported");
-    }
 }

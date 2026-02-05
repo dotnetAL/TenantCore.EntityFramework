@@ -35,6 +35,11 @@ public partial class SchemaPerTenantOptions
     public bool ValidateSchemaNames { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets the maximum length for schema names. Default is 63 (PostgreSQL limit).
+    /// </summary>
+    public int MaxSchemaNameLength { get; set; } = 63;
+
+    /// <summary>
     /// Gets or sets a custom schema name generator function.
     /// If null, uses the default pattern: {SchemaPrefix}{tenantId}
     /// </summary>
@@ -80,16 +85,16 @@ public partial class SchemaPerTenantOptions
         return SanitizeRegex().Replace(idString.ToLowerInvariant(), "_");
     }
 
-    private static void ValidateSchemaName(string schemaName)
+    private void ValidateSchemaName(string schemaName)
     {
         if (string.IsNullOrWhiteSpace(schemaName))
         {
             throw new ArgumentException("Schema name cannot be null or empty.", nameof(schemaName));
         }
 
-        if (schemaName.Length > 63) // PostgreSQL limit
+        if (schemaName.Length > MaxSchemaNameLength)
         {
-            throw new ArgumentException($"Schema name '{schemaName}' exceeds maximum length of 63 characters.", nameof(schemaName));
+            throw new ArgumentException($"Schema name '{schemaName}' exceeds maximum length of {MaxSchemaNameLength} characters.", nameof(schemaName));
         }
 
         if (!ValidSchemaNameRegex().IsMatch(schemaName))
@@ -105,10 +110,10 @@ public partial class SchemaPerTenantOptions
         }
     }
 
-    [GeneratedRegex(@"[^a-z0-9_]", RegexOptions.Compiled)]
+    [GeneratedRegex(@"[^a-z0-9_]")]
     private static partial Regex SanitizeRegex();
 
-    [GeneratedRegex(@"^[a-z_][a-z0-9_]*$", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[a-z_][a-z0-9_]*$", RegexOptions.IgnoreCase)]
     private static partial Regex ValidSchemaNameRegex();
 
     private static readonly HashSet<string> ReservedKeywords = new(StringComparer.OrdinalIgnoreCase)

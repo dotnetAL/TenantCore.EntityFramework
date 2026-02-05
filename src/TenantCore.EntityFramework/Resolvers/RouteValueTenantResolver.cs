@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using TenantCore.EntityFramework.Abstractions;
+using TenantCore.EntityFramework.Utilities;
 
 namespace TenantCore.EntityFramework.Resolvers;
 
@@ -66,7 +67,7 @@ public class RouteValueTenantResolver<TKey> : ITenantResolver<TKey> where TKey :
 
         try
         {
-            var tenantId = _parser != null ? _parser(value) : ParseTenantId(value);
+            var tenantId = _parser != null ? _parser(value) : TenantKeyParser<TKey>.Parse(value);
             return Task.FromResult<TKey?>(tenantId);
         }
         catch
@@ -75,22 +76,4 @@ public class RouteValueTenantResolver<TKey> : ITenantResolver<TKey> where TKey :
         }
     }
 
-    private static TKey ParseTenantId(string value)
-    {
-        var type = typeof(TKey);
-
-        if (type == typeof(string))
-            return (TKey)(object)value;
-
-        if (type == typeof(Guid))
-            return (TKey)(object)Guid.Parse(value);
-
-        if (type == typeof(int))
-            return (TKey)(object)int.Parse(value);
-
-        if (type == typeof(long))
-            return (TKey)(object)long.Parse(value);
-
-        throw new NotSupportedException($"Tenant key type {type.Name} is not supported");
-    }
 }

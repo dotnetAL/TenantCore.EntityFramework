@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using TenantCore.EntityFramework.Abstractions;
+using TenantCore.EntityFramework.Utilities;
 
 namespace TenantCore.EntityFramework.Resolvers;
 
@@ -64,7 +65,7 @@ public class SubdomainTenantResolver<TKey> : ITenantResolver<TKey> where TKey : 
 
         try
         {
-            var tenantId = _parser != null ? _parser(subdomain) : ParseTenantId(subdomain);
+            var tenantId = _parser != null ? _parser(subdomain) : TenantKeyParser<TKey>.Parse(subdomain);
             return Task.FromResult<TKey?>(tenantId);
         }
         catch
@@ -106,22 +107,4 @@ public class SubdomainTenantResolver<TKey> : ITenantResolver<TKey> where TKey : 
         return firstPart;
     }
 
-    private static TKey ParseTenantId(string value)
-    {
-        var type = typeof(TKey);
-
-        if (type == typeof(string))
-            return (TKey)(object)value;
-
-        if (type == typeof(Guid))
-            return (TKey)(object)Guid.Parse(value);
-
-        if (type == typeof(int))
-            return (TKey)(object)int.Parse(value);
-
-        if (type == typeof(long))
-            return (TKey)(object)long.Parse(value);
-
-        throw new NotSupportedException($"Tenant key type {type.Name} is not supported");
-    }
 }

@@ -42,13 +42,13 @@ public static class ServiceCollectionExtensions
         // Register configured resolvers
         foreach (var resolverType in options.TenantResolverTypes)
         {
-            services.TryAddScoped(typeof(ITenantResolver<TKey>), resolverType);
+            services.AddScoped(typeof(ITenantResolver<TKey>), resolverType);
         }
 
         // Register configured seeders
         foreach (var seederType in options.TenantSeederTypes)
         {
-            services.TryAddScoped(typeof(ITenantSeeder<TKey>), seederType);
+            services.AddScoped(typeof(ITenantSeeder<TKey>), seederType);
         }
 
         // Register validator if configured

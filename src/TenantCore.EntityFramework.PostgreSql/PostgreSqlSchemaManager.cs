@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Abstractions;
+using TenantCore.EntityFramework.PostgreSql.Utilities;
 
 namespace TenantCore.EntityFramework.PostgreSql;
 
@@ -185,40 +186,16 @@ public class PostgreSqlSchemaManager : ISchemaManager
 
     private static void ValidateSchemaName(string schemaName)
     {
-        ValidateIdentifier(schemaName, "schema");
+        PostgreSqlIdentifierHelper.ValidateIdentifier(schemaName, "schema");
     }
 
     private static void ValidateIdentifier(string identifier, string type)
     {
-        if (string.IsNullOrWhiteSpace(identifier))
-        {
-            throw new ArgumentException($"{type} name cannot be null or empty.", type);
-        }
-
-        if (identifier.Length > 63)
-        {
-            throw new ArgumentException($"{type} name '{identifier}' exceeds maximum length of 63 characters.", type);
-        }
-
-        // Check for valid PostgreSQL identifier characters
-        foreach (var c in identifier)
-        {
-            if (!char.IsLetterOrDigit(c) && c != '_')
-            {
-                throw new ArgumentException($"{type} name '{identifier}' contains invalid character '{c}'. Only alphanumeric characters and underscores are allowed.", type);
-            }
-        }
-
-        // First character must be letter or underscore
-        if (!char.IsLetter(identifier[0]) && identifier[0] != '_')
-        {
-            throw new ArgumentException($"{type} name '{identifier}' must start with a letter or underscore.", type);
-        }
+        PostgreSqlIdentifierHelper.ValidateIdentifier(identifier, type);
     }
 
     private static string EscapeIdentifier(string identifier)
     {
-        // Double any existing double quotes to escape them
-        return identifier.Replace("\"", "\"\"");
+        return PostgreSqlIdentifierHelper.EscapeIdentifier(identifier);
     }
 }

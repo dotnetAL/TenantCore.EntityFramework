@@ -64,10 +64,5 @@ public enum TenantNotFoundBehavior
     /// <summary>
     /// Returns null and allows the operation to continue.
     /// </summary>
-    ReturnNull,
-
-    /// <summary>
-    /// Uses a default tenant when the requested tenant is not found.
-    /// </summary>
-    UseDefault
+    ReturnNull
 }

@@ -75,7 +75,8 @@ public class TenantEventPublisher<TKey> : ITenantEventPublisher<TKey> where TKey
 
     private async Task DispatchToSubscribersAsync(Func<ITenantEventSubscriber<TKey>, Task> dispatch)
     {
-        var subscribers = _serviceProvider.GetServices<ITenantEventSubscriber<TKey>>();
+        using var scope = _serviceProvider.CreateScope();
+        var subscribers = scope.ServiceProvider.GetServices<ITenantEventSubscriber<TKey>>();
 
         foreach (var subscriber in subscribers)
         {

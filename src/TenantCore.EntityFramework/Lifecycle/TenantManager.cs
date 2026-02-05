@@ -6,7 +6,6 @@ using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
 using TenantCore.EntityFramework.Events;
 using TenantCore.EntityFramework.Migrations;
-using TenantCore.EntityFramework.Strategies;
 
 namespace TenantCore.EntityFramework.Lifecycle;
 
@@ -21,8 +20,8 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly TenantCoreOptions _options;
-    private readonly SchemaPerTenantStrategy<TKey> _strategy;
-    private readonly ITenantContextAccessor<TKey> _contextAccessor;
+    private readonly ITenantStrategy<TKey> _strategy;
+    private readonly ITenantScopeFactory<TKey> _scopeFactory;
     private readonly TenantMigrationRunner<TContext, TKey> _migrationRunner;
     private readonly ITenantEventPublisher<TKey> _eventPublisher;
     private readonly ILogger<TenantManager<TContext, TKey>> _logger;
@@ -33,15 +32,15 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
     /// <param name="serviceProvider">The service provider.</param>
     /// <param name="options">The tenant configuration options.</param>
     /// <param name="strategy">The tenant isolation strategy.</param>
-    /// <param name="contextAccessor">The tenant context accessor.</param>
+    /// <param name="scopeFactory">The tenant scope factory.</param>
     /// <param name="migrationRunner">The migration runner.</param>
     /// <param name="eventPublisher">The event publisher.</param>
     /// <param name="logger">The logger instance.</param>
     public TenantManager(
         IServiceProvider serviceProvider,
         TenantCoreOptions options,
-        SchemaPerTenantStrategy<TKey> strategy,
-        ITenantContextAccessor<TKey> contextAccessor,
+        ITenantStrategy<TKey> strategy,
+        ITenantScopeFactory<TKey> scopeFactory,
         TenantMigrationRunner<TContext, TKey> migrationRunner,
         ITenantEventPublisher<TKey> eventPublisher,
         ILogger<TenantManager<TContext, TKey>> logger)
@@ -49,7 +48,7 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
         _serviceProvider = serviceProvider;
         _options = options;
         _strategy = strategy;
-        _contextAccessor = contextAccessor;
+        _scopeFactory = scopeFactory;
         _migrationRunner = migrationRunner;
         _eventPublisher = eventPublisher;
         _logger = logger;
@@ -175,28 +174,16 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
 
         _logger.LogDebug("Running {Count} tenant seeders for tenant {TenantId}", seeders.Count, tenantId);
 
-        // Create a scoped context for seeding
-        var schemaName = _options.SchemaPerTenant.GenerateSchemaName(tenantId);
-        var tenantContext = new TenantContext<TKey>(tenantId, schemaName);
-        _contextAccessor.SetTenantContext(tenantContext);
+        using var tenantScope = _scopeFactory.CreateScope(tenantId);
 
-        try
+        using var scope = _serviceProvider.CreateScope();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        foreach (var seeder in seeders)
         {
-            using var scope = _serviceProvider.CreateScope();
-            var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
-            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-
-            foreach (var seeder in seeders)
-            {
-                _logger.LogDebug("Running seeder {SeederType}", seeder.GetType().Name);
-                await seeder.SeedAsync(context, tenantId, cancellationToken);
-            }
-
-            await context.SaveChangesAsync(cancellationToken);
-        }
-        finally
-        {
-            _contextAccessor.SetTenantContext(null);
+            _logger.LogDebug("Running seeder {SeederType}", seeder.GetType().Name);
+            await seeder.SeedAsync(context, tenantId, cancellationToken);
         }
     }
 }

@@ -127,7 +127,6 @@ public class TenantResolverPipeline<TKey> : ITenantResolverPipeline<TKey> where 
         {
             TenantNotFoundBehavior.Throw => throw new TenantNotFoundException("Unable to resolve tenant"),
             TenantNotFoundBehavior.ReturnNull => default,
-            TenantNotFoundBehavior.UseDefault => default, // Caller should handle default tenant
             _ => default
         };
     }

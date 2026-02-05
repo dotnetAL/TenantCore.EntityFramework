@@ -50,12 +50,12 @@ public class TenantHealthCheck<TContext, TKey> : IHealthCheck
             }
 
             // Get tenant count
-            var tenants = await _strategy.GetTenantsAsync(dbContext, cancellationToken);
-            var tenantCount = tenants.Count();
+            var tenantList = (await _strategy.GetTenantsAsync(dbContext, cancellationToken)).ToList();
+            var tenantCount = tenantList.Count;
 
             // Check for pending migrations
-            var pendingMigrations = await dbContext.Database.GetPendingMigrationsAsync(cancellationToken);
-            var pendingCount = pendingMigrations.Count();
+            var pendingMigrationsList = (await dbContext.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
+            var pendingCount = pendingMigrationsList.Count;
 
             var data = new Dictionary<string, object>
             {

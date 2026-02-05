@@ -7,6 +7,7 @@ using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
 using TenantCore.EntityFramework.Events;
+using TenantCore.EntityFramework.Utilities;
 
 namespace TenantCore.EntityFramework.Migrations;
 
@@ -70,23 +71,25 @@ public class TenantMigrationRunner<TContext, TKey>
         var semaphore = new SemaphoreSlim(migrationOptions.ParallelMigrations);
         var failures = new List<(string TenantId, Exception Exception)>();
 
-        var tasks = tenantList.Select(async tenantId =>
+        var tasks = tenantList.Select(async tenantIdString =>
         {
             await semaphore.WaitAsync(cancellationToken);
             try
             {
-                await MigrateTenantInternalAsync(tenantId, cancellationToken);
+                var schemaName = _options.SchemaPerTenant.GenerateSchemaName(tenantIdString);
+                var tenantId = TenantKeyParser<TKey>.Parse(tenantIdString);
+                await MigrateTenantInternalAsync(schemaName, tenantId, cancellationToken);
             }
             catch (Exception ex) when (migrationOptions.FailureBehavior != MigrationFailureBehavior.StopAll)
             {
                 lock (failures)
                 {
-                    failures.Add((tenantId, ex));
+                    failures.Add((tenantIdString, ex));
                 }
 
                 if (migrationOptions.FailureBehavior == MigrationFailureBehavior.Skip)
                 {
-                    _logger.LogWarning(ex, "Migration failed for tenant {TenantId}, skipping", tenantId);
+                    _logger.LogWarning(ex, "Migration failed for tenant {TenantId}, skipping", tenantIdString);
                 }
             }
             finally
@@ -123,24 +126,17 @@ public class TenantMigrationRunner<TContext, TKey>
     public async Task MigrateTenantAsync(TKey tenantId, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.SchemaPerTenant.GenerateSchemaName(tenantId);
-        await MigrateTenantInternalAsync(schemaName, cancellationToken);
+        await MigrateTenantInternalAsync(schemaName, tenantId, cancellationToken);
     }
 
-    private async Task MigrateTenantInternalAsync(string tenantId, CancellationToken cancellationToken)
+    private async Task MigrateTenantInternalAsync(string schemaName, TKey tenantId, CancellationToken cancellationToken)
     {
-        var schemaName = _options.SchemaPerTenant.SchemaPrefix + tenantId;
-        if (tenantId.StartsWith(_options.SchemaPerTenant.SchemaPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            schemaName = tenantId;
-            tenantId = _options.SchemaPerTenant.ExtractTenantId(tenantId);
-        }
-
         _logger.LogDebug("Starting migration for tenant {TenantId} in schema {Schema}", tenantId, schemaName);
 
         using var scope = _serviceProvider.CreateScope();
 
         // Create a tenant context for this migration
-        var tenantContext = new TenantContext<TKey>(ParseTenantId(tenantId), schemaName);
+        var tenantContext = new TenantContext<TKey>(tenantId, schemaName);
         _contextAccessor.SetTenantContext(tenantContext);
 
         try
@@ -207,7 +203,7 @@ public class TenantMigrationRunner<TContext, TKey>
         CancellationToken cancellationToken)
     {
         var migrator = context.GetService<IMigrator>();
-        var escapedSchema = schemaName.Replace("\"", "\"\"");
+        var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
 
         // First, ensure the schema and migrations history table exist
         var setupSql = $@"
@@ -272,7 +268,7 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
     /// </summary>
     private static string InjectSchemaIntoMigrationSql(string sql, string schemaName)
     {
-        var escapedSchema = schemaName.Replace("\"", "\"\"");
+        var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
 
         // Build the schema-qualified SQL
         var builder = new System.Text.StringBuilder();
@@ -316,24 +312,5 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
                 await Task.Delay(options.RetryDelay, cancellationToken);
             }
         }
-    }
-
-    private static TKey ParseTenantId(string tenantIdString)
-    {
-        var type = typeof(TKey);
-
-        if (type == typeof(string))
-            return (TKey)(object)tenantIdString;
-
-        if (type == typeof(Guid))
-            return (TKey)(object)Guid.Parse(tenantIdString);
-
-        if (type == typeof(int))
-            return (TKey)(object)int.Parse(tenantIdString);
-
-        if (type == typeof(long))
-            return (TKey)(object)long.Parse(tenantIdString);
-
-        throw new NotSupportedException($"Tenant key type {type.Name} is not supported for parsing");
     }
 }

@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 
@@ -107,29 +106,5 @@ public abstract class TenantDbContext<TKey> : DbContext where TKey : notnull
             throw new InvalidOperationException(
                 "No tenant context is available. Ensure a tenant has been resolved before accessing tenant-specific data.");
         }
-    }
-}
-
-/// <summary>
-/// Extension methods for creating tenant-aware DbContext options.
-/// </summary>
-public static class TenantDbContextOptionsExtensions
-{
-    /// <summary>
-    /// Creates a new DbContextOptions configured for the specified tenant schema.
-    /// </summary>
-    /// <typeparam name="TContext">The DbContext type.</typeparam>
-    /// <param name="options">The original options.</param>
-    /// <param name="schema">The tenant schema name.</param>
-    /// <returns>New options configured for the tenant.</returns>
-    public static DbContextOptions<TContext> WithTenantSchema<TContext>(
-        this DbContextOptions<TContext> options,
-        string schema) where TContext : DbContext
-    {
-        var builder = new DbContextOptionsBuilder<TContext>(options);
-
-        // The schema will be applied via OnModelCreating in TenantDbContext
-        // Store the schema in the options extensions if needed
-        return builder.Options;
     }
 }

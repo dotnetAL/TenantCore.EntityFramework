@@ -14,8 +14,7 @@ public interface ITenantResolver<TKey> where TKey : notnull
     Task<TKey?> ResolveTenantAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the priority of this resolver. Higher values indicate higher priority.
-    /// Used when multiple resolvers are registered to determine resolution order.
+    /// Gets the priority of this resolver. Higher values run first in the pipeline. Default is 0.
     /// </summary>
     int Priority => 0;
 }

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using TenantCore.EntityFramework.Utilities;
 
 namespace TenantCore.EntityFramework.Migrations;
 
@@ -59,7 +60,8 @@ public class MigrationTracker
         string schema,
         CancellationToken cancellationToken) where TContext : DbContext
     {
-        var historyTable = $"\"{schema}\".\"__EFMigrationsHistory\"";
+        var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schema);
+        var historyTable = $"\"{escapedSchema}\".\"__EFMigrationsHistory\"";
 
         var sql = $@"
             SELECT ""MigrationId""

@@ -37,24 +37,12 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     /// <inheritdoc />
     public void ConfigureDbContext(DbContextOptionsBuilder optionsBuilder, TKey tenantId)
     {
-        ConfigureDbContext(optionsBuilder, (object)tenantId);
-    }
-
-    /// <inheritdoc />
-    public void ConfigureDbContext(DbContextOptionsBuilder optionsBuilder, object tenantId)
-    {
         // Schema configuration is handled via OnModelCreating
         // Connection-level search_path is handled by ISchemaManager.SetCurrentSchemaAsync
     }
 
     /// <inheritdoc />
     public void OnModelCreating(ModelBuilder modelBuilder, TKey tenantId)
-    {
-        OnModelCreating(modelBuilder, (object)tenantId);
-    }
-
-    /// <inheritdoc />
-    public void OnModelCreating(ModelBuilder modelBuilder, object tenantId)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);
         modelBuilder.HasDefaultSchema(schemaName);
@@ -63,12 +51,6 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
 
     /// <inheritdoc />
     public async Task ProvisionTenantAsync(DbContext context, TKey tenantId, CancellationToken cancellationToken = default)
-    {
-        await ProvisionTenantAsync(context, (object)tenantId, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task ProvisionTenantAsync(DbContext context, object tenantId, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);
 
@@ -86,12 +68,6 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
 
     /// <inheritdoc />
     public async Task DeleteTenantAsync(DbContext context, TKey tenantId, bool hardDelete = false, CancellationToken cancellationToken = default)
-    {
-        await DeleteTenantAsync(context, (object)tenantId, hardDelete, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task DeleteTenantAsync(DbContext context, object tenantId, bool hardDelete = false, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);
 
@@ -119,12 +95,6 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     /// <inheritdoc />
     public async Task<bool> TenantExistsAsync(DbContext context, TKey tenantId, CancellationToken cancellationToken = default)
     {
-        return await TenantExistsAsync(context, (object)tenantId, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task<bool> TenantExistsAsync(DbContext context, object tenantId, CancellationToken cancellationToken = default)
-    {
         var schemaName = _options.GenerateSchemaName(tenantId);
         return await _schemaManager.SchemaExistsAsync(context, schemaName, cancellationToken);
     }
@@ -136,12 +106,7 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
         return schemas.Select(s => _options.ExtractTenantId(s));
     }
 
-    /// <summary>
-    /// Archives a tenant by renaming its schema.
-    /// </summary>
-    /// <param name="context">A DbContext instance for database access.</param>
-    /// <param name="tenantId">The tenant identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <inheritdoc />
     public async Task ArchiveTenantAsync(DbContext context, TKey tenantId, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);
@@ -158,12 +123,7 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
         await _schemaManager.RenameSchemaAsync(context, schemaName, archivedName, cancellationToken);
     }
 
-    /// <summary>
-    /// Restores an archived tenant by renaming its schema back.
-    /// </summary>
-    /// <param name="context">A DbContext instance for database access.</param>
-    /// <param name="tenantId">The tenant identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <inheritdoc />
     public async Task RestoreTenantAsync(DbContext context, TKey tenantId, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);

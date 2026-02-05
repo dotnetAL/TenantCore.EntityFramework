@@ -129,7 +129,6 @@ public static class PostgreSqlExtensions
 
         // Register strategy
         services.TryAddSingleton<ITenantStrategy<TKey>, SchemaPerTenantStrategy<TKey>>();
-        services.TryAddSingleton<SchemaPerTenantStrategy<TKey>>();
 
         // Migration runner
         services.TryAddSingleton<TenantMigrationRunner<TContext, TKey>>();
