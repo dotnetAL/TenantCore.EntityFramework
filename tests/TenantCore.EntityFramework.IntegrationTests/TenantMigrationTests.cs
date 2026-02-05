@@ -1,6 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Abstractions;
@@ -12,17 +10,18 @@ using Xunit;
 namespace TenantCore.EntityFramework.IntegrationTests;
 
 /// <summary>
-/// Integration tests verifying that migrations are correctly applied to multiple tenant schemas.
+/// Integration tests verifying that EF Core migrations are correctly applied to multiple tenant schemas.
 /// These tests ensure that:
-/// 1. Multiple tenant schemas can be provisioned
-/// 2. The same table structure (migrations) is applied to each schema
-/// 3. Each tenant's schema is independent and has the correct structure
+/// 1. Multiple tenant schemas can be provisioned with proper EF Core migrations
+/// 2. The same migration history is tracked independently per schema
+/// 3. Each tenant's schema has the correct structure from migrations
 /// </summary>
 [Collection("PostgreSql")]
 [Trait("Category", "Integration")]
 public class TenantMigrationTests
 {
     private readonly PostgreSqlFixture _fixture;
+    private const string MigrationsAssembly = "TenantCore.EntityFramework.IntegrationTests";
 
     public TenantMigrationTests(PostgreSqlFixture fixture)
     {
@@ -40,30 +39,25 @@ public class TenantMigrationTests
             options.UseConnectionString(_fixture.ConnectionString);
         });
 
-        services.AddTenantDbContextPostgreSql<MigrationTestDbContext, string>(_fixture.ConnectionString);
+        services.AddTenantDbContextPostgreSql<MigrationTestDbContext, string>(
+            _fixture.ConnectionString,
+            MigrationsAssembly);
 
         return services.BuildServiceProvider();
     }
 
     /// <summary>
-    /// Helper to clean up schemas after a test
+    /// Helper to clean up schemas after a test using ITenantManager
     /// </summary>
-    private async Task CleanupSchemasAsync(ISchemaManager schemaManager, params string[] tenantIds)
+    private async Task CleanupTenantsAsync(ITenantManager<string> tenantManager, params string[] tenantIds)
     {
-        var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
-            .UseNpgsql(_fixture.ConnectionString)
-            .Options;
-
-        await using var context = new MigrationTestDbContext(options);
-
         foreach (var tenantId in tenantIds)
         {
             try
             {
-                var schemaName = $"tenant_{tenantId}";
-                if (await schemaManager.SchemaExistsAsync(context, schemaName))
+                if (await tenantManager.TenantExistsAsync(tenantId))
                 {
-                    await schemaManager.DropSchemaAsync(context, schemaName, cascade: true);
+                    await tenantManager.DeleteTenantAsync(tenantId, hardDelete: true);
                 }
             }
             catch
@@ -71,95 +65,6 @@ public class TenantMigrationTests
                 // Ignore cleanup errors
             }
         }
-    }
-
-    /// <summary>
-    /// Provisions a tenant schema and applies the database structure using EF Core's CreateTables.
-    /// This simulates what migrations would do - creating the schema structure in each tenant.
-    /// </summary>
-    private async Task ProvisionTenantWithMigrationsAsync(
-        ISchemaManager schemaManager,
-        ITenantContextAccessor<string> tenantContextAccessor,
-        IDbContextFactory<MigrationTestDbContext> contextFactory,
-        string tenantId)
-    {
-        var schemaName = $"tenant_{tenantId}";
-
-        // Create the schema first
-        var adminOptions = new DbContextOptionsBuilder<MigrationTestDbContext>()
-            .UseNpgsql(_fixture.ConnectionString)
-            .Options;
-
-        await using var adminContext = new MigrationTestDbContext(adminOptions);
-        await schemaManager.CreateSchemaAsync(adminContext, schemaName);
-
-        // Set tenant context and create tables (simulating migration application)
-        tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
-        try
-        {
-            await using var context = await contextFactory.CreateDbContextAsync();
-            var databaseCreator = context.GetService<IRelationalDatabaseCreator>();
-            await databaseCreator.CreateTablesAsync();
-        }
-        finally
-        {
-            tenantContextAccessor.SetTenantContext(null);
-        }
-    }
-
-    /// <summary>
-    /// Adds an additional column to a tenant's schema to simulate a migration update.
-    /// </summary>
-    private async Task ApplyAdditionalMigrationAsync(
-        ISchemaManager schemaManager,
-        string tenantId,
-        string columnName,
-        string columnType)
-    {
-        var schemaName = $"tenant_{tenantId}";
-
-        var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
-            .UseNpgsql(_fixture.ConnectionString)
-            .Options;
-
-        await using var context = new MigrationTestDbContext(options);
-
-        // Add a new column to Products table (simulating a migration)
-        var sql = $@"ALTER TABLE ""{schemaName}"".""Products"" ADD COLUMN IF NOT EXISTS ""{columnName}"" {columnType}";
-#pragma warning disable EF1002
-        await context.Database.ExecuteSqlRawAsync(sql);
-#pragma warning restore EF1002
-    }
-
-    /// <summary>
-    /// Checks if a column exists in a tenant's schema.
-    /// </summary>
-    private async Task<bool> ColumnExistsAsync(string tenantId, string tableName, string columnName)
-    {
-        var schemaName = $"tenant_{tenantId}";
-
-        var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
-            .UseNpgsql(_fixture.ConnectionString)
-            .Options;
-
-        await using var context = new MigrationTestDbContext(options);
-
-        var sql = $@"
-            SELECT COUNT(*) FROM information_schema.columns
-            WHERE table_schema = '{schemaName}'
-            AND table_name = '{tableName}'
-            AND column_name = '{columnName}'";
-
-#pragma warning disable EF1002
-        var result = await context.Database.ExecuteSqlRawAsync(sql);
-#pragma warning restore EF1002
-
-        // Use a proper query to check
-        using var command = context.Database.GetDbConnection().CreateCommand();
-        command.CommandText = sql;
-        await context.Database.OpenConnectionAsync();
-        var count = await command.ExecuteScalarAsync();
-        return Convert.ToInt32(count) > 0;
     }
 
     /// <summary>
@@ -193,13 +98,73 @@ public class TenantMigrationTests
         return tables;
     }
 
+    /// <summary>
+    /// Checks if the __EFMigrationsHistory table exists in a tenant's schema.
+    /// </summary>
+    private async Task<bool> MigrationsHistoryExistsAsync(string tenantId)
+    {
+        var schemaName = $"tenant_{tenantId}";
+
+        var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
+            .UseNpgsql(_fixture.ConnectionString)
+            .Options;
+
+        await using var context = new MigrationTestDbContext(options);
+
+        await context.Database.OpenConnectionAsync();
+        using var command = context.Database.GetDbConnection().CreateCommand();
+        command.CommandText = $@"
+            SELECT COUNT(*) FROM information_schema.tables
+            WHERE table_schema = '{schemaName}'
+            AND table_name = '__EFMigrationsHistory'";
+
+        var result = await command.ExecuteScalarAsync();
+        return Convert.ToInt64(result) > 0;
+    }
+
+    /// <summary>
+    /// Gets the applied migrations from a tenant's __EFMigrationsHistory table.
+    /// </summary>
+    private async Task<List<string>> GetAppliedMigrationsAsync(string tenantId)
+    {
+        var schemaName = $"tenant_{tenantId}";
+
+        var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
+            .UseNpgsql(_fixture.ConnectionString)
+            .Options;
+
+        await using var context = new MigrationTestDbContext(options);
+
+        await context.Database.OpenConnectionAsync();
+        using var command = context.Database.GetDbConnection().CreateCommand();
+        command.CommandText = $@"
+            SELECT ""MigrationId"" FROM ""{schemaName}"".""__EFMigrationsHistory""
+            ORDER BY ""MigrationId""";
+
+        var migrations = new List<string>();
+        try
+        {
+            using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                migrations.Add(reader.GetString(0));
+            }
+        }
+        catch
+        {
+            // Table may not exist yet
+        }
+
+        return migrations;
+    }
+
     [Fact]
     public async Task ProvisionThreeTenants_ApplyMigrations_EachTenantShouldHaveSameSchema()
     {
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<MigrationTestDbContext>>();
 
@@ -210,19 +175,20 @@ public class TenantMigrationTests
 
         try
         {
-            // Act - Provision all 3 tenants with migrations (initial schema)
+            // Act - Provision all 3 tenants using ITenantManager (applies EF Core migrations)
             foreach (var tenant in tenants)
             {
-                await ProvisionTenantWithMigrationsAsync(schemaManager, tenantContextAccessor, contextFactory, tenant);
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
-            // Assert - Each tenant should have the same tables
+            // Assert - Each tenant should have the same tables from migrations
             foreach (var tenant in tenants)
             {
                 var tables = await GetTablesInSchemaAsync(tenant);
 
                 Assert.Contains("Products", tables);
                 Assert.Contains("Categories", tables);
+                Assert.Contains("__EFMigrationsHistory", tables);
             }
 
             // Verify each tenant can independently store and retrieve data
@@ -267,56 +233,175 @@ public class TenantMigrationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants.ToArray());
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
         }
     }
 
     [Fact]
-    public async Task ProvisionThreeTenants_ApplyNewMigration_AllTenantsShouldHaveNewColumn()
+    public async Task ProvisionTenant_ShouldCreateMigrationsHistoryInTenantSchema()
     {
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
-        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
-        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<MigrationTestDbContext>>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
 
-        // Create 3 tenants
-        var tenants = Enumerable.Range(1, 3)
-            .Select(i => $"newmig{i}_{Guid.NewGuid():N}"[..15])
-            .ToList();
-
-        var newColumnName = "StockQuantity";
+        var tenantId = $"hist_{Guid.NewGuid():N}"[..15];
 
         try
         {
-            // Step 1: Provision all 3 tenants with initial migrations
+            // Act - Provision tenant using EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenantId);
+
+            // Assert - __EFMigrationsHistory should exist in tenant's schema
+            var historyExists = await MigrationsHistoryExistsAsync(tenantId);
+            Assert.True(historyExists, "Migrations history table should exist in tenant schema");
+
+            // Verify migrations were recorded
+            var appliedMigrations = await GetAppliedMigrationsAsync(tenantId);
+            Assert.NotEmpty(appliedMigrations);
+            Assert.Contains(appliedMigrations, m => m.Contains("Initial"));
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ProvisionThreeTenants_EachTenantShouldHaveIndependentMigrationHistory()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+
+        var tenants = Enumerable.Range(1, 3)
+            .Select(i => $"ind{i}_{Guid.NewGuid():N}"[..15])
+            .ToList();
+
+        try
+        {
+            // Act - Provision all tenants
             foreach (var tenant in tenants)
             {
-                await ProvisionTenantWithMigrationsAsync(schemaManager, tenantContextAccessor, contextFactory, tenant);
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
-            // Verify the new column does NOT exist yet
+            // Assert - Each tenant should have its own migrations history
             foreach (var tenant in tenants)
             {
-                var columnExists = await ColumnExistsAsync(tenant, "Products", newColumnName);
-                Assert.False(columnExists, $"tenant {tenant} should NOT have {newColumnName} column before migration");
+                var historyExists = await MigrationsHistoryExistsAsync(tenant);
+                Assert.True(historyExists, $"Tenant {tenant} should have its own migrations history");
+
+                var appliedMigrations = await GetAppliedMigrationsAsync(tenant);
+                Assert.NotEmpty(appliedMigrations);
             }
 
-            // Step 2: Apply a new "migration" to all tenants (add StockQuantity column)
+            // Verify migrations are tracked independently (no cross-contamination)
+            var migrations1 = await GetAppliedMigrationsAsync(tenants[0]);
+            var migrations2 = await GetAppliedMigrationsAsync(tenants[1]);
+            var migrations3 = await GetAppliedMigrationsAsync(tenants[2]);
+
+            // All should have the same migrations applied
+            Assert.Equal(migrations1.Count, migrations2.Count);
+            Assert.Equal(migrations2.Count, migrations3.Count);
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task MigrateTenant_WhenAlreadyMigrated_ShouldBeIdempotent()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+
+        var tenantId = $"idem_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Act - Provision tenant (applies migrations)
+            await tenantManager.ProvisionTenantAsync(tenantId);
+
+            // Get applied migrations count
+            var migrationsBeforeSecondRun = await GetAppliedMigrationsAsync(tenantId);
+
+            // Run migrations again
+            await tenantManager.MigrateTenantAsync(tenantId);
+
+            // Assert - Should be the same number of migrations (no duplicates)
+            var migrationsAfterSecondRun = await GetAppliedMigrationsAsync(tenantId);
+            Assert.Equal(migrationsBeforeSecondRun.Count, migrationsAfterSecondRun.Count);
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task MigrateAllTenants_ShouldApplyMigrationsToAllTenants()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+
+        var tenants = Enumerable.Range(1, 3)
+            .Select(i => $"all{i}_{Guid.NewGuid():N}"[..15])
+            .ToList();
+
+        try
+        {
+            // Provision all tenants
             foreach (var tenant in tenants)
             {
-                await ApplyAdditionalMigrationAsync(schemaManager, tenant, newColumnName, "INTEGER DEFAULT 0");
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
-            // Assert - Each tenant should now have the new column
+            // Act - Migrate all tenants (should be idempotent since already migrated)
+            await tenantManager.MigrateAllTenantsAsync();
+
+            // Assert - All tenants should have migrations applied
             foreach (var tenant in tenants)
             {
-                var columnExists = await ColumnExistsAsync(tenant, "Products", newColumnName);
-                Assert.True(columnExists, $"tenant {tenant} should have {newColumnName} column after migration");
+                var appliedMigrations = await GetAppliedMigrationsAsync(tenant);
+                Assert.NotEmpty(appliedMigrations);
+            }
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task ProvisionThreeTenants_DataIsolationBetweenSchemas()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<MigrationTestDbContext>>();
+
+        var tenants = Enumerable.Range(1, 3)
+            .Select(i => $"iso{i}_{Guid.NewGuid():N}"[..15])
+            .ToList();
+
+        try
+        {
+            // Provision all tenants using EF Core migrations
+            foreach (var tenant in tenants)
+            {
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
-            // Verify we can use the new column in each tenant
+            // Add unique data to each tenant
             foreach (var tenant in tenants)
             {
                 var schemaName = $"tenant_{tenant}";
@@ -326,22 +411,33 @@ public class TenantMigrationTests
                 {
                     await using var context = await contextFactory.CreateDbContextAsync();
 
-                    // Insert data using raw SQL to include the new column
-                    var insertSql = $@"
-                        INSERT INTO ""{schemaName}"".""Products"" (""Name"", ""Price"", ""CreatedAt"", ""{newColumnName}"")
-                        VALUES ('Test Product', 10.00, NOW(), 100)";
-#pragma warning disable EF1002
-                    await context.Database.ExecuteSqlRawAsync(insertSql);
-#pragma warning restore EF1002
+                    var product = new Product
+                    {
+                        Name = $"Product_for_{tenant}",
+                        Price = 50.00m
+                    };
+                    context.Products.Add(product);
+                    await context.SaveChangesAsync();
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
 
-                    // Query to verify the new column has data
-                    var selectSql = $@"SELECT ""{newColumnName}"" FROM ""{schemaName}"".""Products"" LIMIT 1";
-                    await context.Database.OpenConnectionAsync();
-                    using var command = context.Database.GetDbConnection().CreateCommand();
-                    command.CommandText = selectSql;
-                    var stockValue = await command.ExecuteScalarAsync();
+            // Assert - Each tenant should only see its own data
+            foreach (var tenant in tenants)
+            {
+                var schemaName = $"tenant_{tenant}";
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schemaName));
 
-                    Assert.Equal(100, Convert.ToInt32(stockValue));
+                try
+                {
+                    await using var context = await contextFactory.CreateDbContextAsync();
+                    var products = await context.Products.ToListAsync();
+
+                    Assert.Single(products);
+                    Assert.Equal($"Product_for_{tenant}", products[0].Name);
                 }
                 finally
                 {
@@ -351,160 +447,74 @@ public class TenantMigrationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants.ToArray());
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
         }
     }
 
     [Fact]
-    public async Task ProvisionThreeTenants_MigrationsAppliedIndependently_ShouldNotAffectOtherTenants()
+    public async Task TenantExists_ShouldReturnTrueForProvisionedTenant()
     {
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
-        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
-        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<MigrationTestDbContext>>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
 
-        // Create 3 tenants
-        var tenant1 = $"ind1_{Guid.NewGuid():N}"[..15];
-        var tenant2 = $"ind2_{Guid.NewGuid():N}"[..15];
-        var tenant3 = $"ind3_{Guid.NewGuid():N}"[..15];
-        var tenants = new[] { tenant1, tenant2, tenant3 };
-
-        var newColumnName = "SpecialField";
+        var tenantId = $"exists_{Guid.NewGuid():N}"[..15];
 
         try
         {
-            // Provision all 3 tenants with initial migrations
-            foreach (var tenant in tenants)
-            {
-                await ProvisionTenantWithMigrationsAsync(schemaManager, tenantContextAccessor, contextFactory, tenant);
-            }
+            // Assert - Should not exist before provisioning
+            var existsBefore = await tenantManager.TenantExistsAsync(tenantId);
+            Assert.False(existsBefore, "Tenant should not exist before provisioning");
 
-            // Apply the new migration ONLY to tenant1 and tenant2 (not tenant3)
-            await ApplyAdditionalMigrationAsync(schemaManager, tenant1, newColumnName, "VARCHAR(100)");
-            await ApplyAdditionalMigrationAsync(schemaManager, tenant2, newColumnName, "VARCHAR(100)");
+            // Act
+            await tenantManager.ProvisionTenantAsync(tenantId);
 
-            // Assert - tenant1 and tenant2 should have the new column
-            var tenant1HasColumn = await ColumnExistsAsync(tenant1, "Products", newColumnName);
-            var tenant2HasColumn = await ColumnExistsAsync(tenant2, "Products", newColumnName);
-            var tenant3HasColumn = await ColumnExistsAsync(tenant3, "Products", newColumnName);
-
-            Assert.True(tenant1HasColumn, "tenant1 should have the new column");
-            Assert.True(tenant2HasColumn, "tenant2 should have the new column");
-            Assert.False(tenant3HasColumn, "tenant3 should NOT have the new column (migration not applied)");
-
-            // Verify tenant3 can still operate normally without the new column
-            var schemaName3 = $"tenant_{tenant3}";
-            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant3, schemaName3));
-
-            try
-            {
-                await using var context = await contextFactory.CreateDbContextAsync();
-
-                // This should work fine - tenant3 has the base schema
-                var product = new Product { Name = "Tenant3 Product", Price = 50.00m };
-                context.Products.Add(product);
-                await context.SaveChangesAsync();
-
-                var savedProduct = await context.Products.FirstOrDefaultAsync();
-                Assert.NotNull(savedProduct);
-                Assert.Equal("Tenant3 Product", savedProduct.Name);
-            }
-            finally
-            {
-                tenantContextAccessor.SetTenantContext(null);
-            }
+            // Assert - Should exist after provisioning
+            var existsAfter = await tenantManager.TenantExistsAsync(tenantId);
+            Assert.True(existsAfter, "Tenant should exist after provisioning");
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants);
+            await CleanupTenantsAsync(tenantManager, tenantId);
         }
     }
 
     [Fact]
-    public async Task ProvisionThreeTenants_ApplyMultipleMigrations_AllMigrationsShouldBeApplied()
+    public async Task GetTenants_ShouldReturnAllProvisionedTenants()
     {
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
-        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
-        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<MigrationTestDbContext>>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
 
-        // Create 3 tenants
+        var uniquePrefix = Guid.NewGuid().ToString("N")[..6];
         var tenants = Enumerable.Range(1, 3)
-            .Select(i => $"multi{i}_{Guid.NewGuid():N}"[..15])
+            .Select(i => $"{uniquePrefix}_{i}")
             .ToList();
 
-        // Multiple migrations to apply
-        var migrations = new[]
-        {
-            ("Migration1_StockQty", "StockQuantity", "INTEGER DEFAULT 0"),
-            ("Migration2_Weight", "Weight", "DECIMAL(10,2)"),
-            ("Migration3_IsActive", "IsActive", "BOOLEAN DEFAULT TRUE")
-        };
-
         try
         {
-            // Provision all 3 tenants with initial schema
+            // Provision all tenants
             foreach (var tenant in tenants)
             {
-                await ProvisionTenantWithMigrationsAsync(schemaManager, tenantContextAccessor, contextFactory, tenant);
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
-            // Apply all migrations to all tenants
-            foreach (var (migrationName, columnName, columnType) in migrations)
-            {
-                foreach (var tenant in tenants)
-                {
-                    await ApplyAdditionalMigrationAsync(schemaManager, tenant, columnName, columnType);
-                }
-            }
+            // Act
+            var allTenants = await tenantManager.GetTenantsAsync();
+            var tenantList = allTenants.ToList();
 
-            // Assert - Each tenant should have all new columns
+            // Assert - All provisioned tenants should be returned
+            // GetTenantsAsync returns tenant IDs (without the schema prefix)
             foreach (var tenant in tenants)
             {
-                foreach (var (_, columnName, _) in migrations)
-                {
-                    var hasColumn = await ColumnExistsAsync(tenant, "Products", columnName);
-                    Assert.True(hasColumn, $"tenant {tenant} should have column {columnName}");
-                }
-
-                // Verify we can query with all columns
-                var schemaName = $"tenant_{tenant}";
-
-                var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
-                    .UseNpgsql(_fixture.ConnectionString)
-                    .Options;
-
-                await using var context = new MigrationTestDbContext(options);
-                await context.Database.OpenConnectionAsync();
-
-                using var command = context.Database.GetDbConnection().CreateCommand();
-                command.CommandText = $@"
-                    INSERT INTO ""{schemaName}"".""Products""
-                    (""Name"", ""Price"", ""CreatedAt"", ""StockQuantity"", ""Weight"", ""IsActive"")
-                    VALUES ('Full Product', 25.00, NOW(), 50, 1.5, true)
-                    RETURNING ""Id"", ""StockQuantity"", ""Weight"", ""IsActive""";
-
-                using var reader = await command.ExecuteReaderAsync();
-                await reader.ReadAsync();
-
-                var id = reader.GetInt32(0);
-                var stockQty = reader.GetInt32(1);
-                var weight = reader.GetDecimal(2);
-                var isActive = reader.GetBoolean(3);
-
-                Assert.True(id > 0);
-                Assert.Equal(50, stockQty);
-                Assert.Equal(1.5m, weight);
-                Assert.True(isActive);
+                Assert.Contains(tenant, tenantList);
             }
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants.ToArray());
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
         }
     }
 }

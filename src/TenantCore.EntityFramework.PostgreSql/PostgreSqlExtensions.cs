@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TenantCore.EntityFramework.Abstractions;
@@ -83,12 +84,14 @@ public static class PostgreSqlExtensions
     {
         services.AddTenantCorePostgreSql();
 
+        // Register the connection interceptor as a singleton so it's shared across contexts
+        services.TryAddSingleton<TenantSchemaConnectionInterceptor<TKey>>();
+
         services.AddDbContextFactory<TContext>((sp, options) =>
         {
+            // Get the current tenant schema at context creation time
             var tenantAccessor = sp.GetService<ITenantContextAccessor<TKey>>();
-
-            // Determine schema for this context
-            var schema = tenantAccessor?.TenantContext?.SchemaName;
+            var currentSchema = tenantAccessor?.TenantContext?.SchemaName;
 
             options.UseNpgsql(connectionString, npgsql =>
             {
@@ -98,11 +101,11 @@ public static class PostgreSqlExtensions
                     npgsql.MigrationsAssembly(migrationsAssembly);
                 }
 
-                // Set migrations history table per tenant schema to ensure
-                // each tenant tracks its own migration state independently
-                if (!string.IsNullOrEmpty(schema))
+                // Set migrations history table to the current tenant's schema
+                // This ensures __EFMigrationsHistory is created in the tenant schema
+                if (!string.IsNullOrEmpty(currentSchema))
                 {
-                    npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema);
+                    npgsql.MigrationsHistoryTable("__EFMigrationsHistory", currentSchema);
                 }
 
                 npgsqlOptionsAction?.Invoke(npgsql);
@@ -111,6 +114,11 @@ public static class PostgreSqlExtensions
             // Register the tenant-aware model cache key factory to ensure
             // EF Core creates separate models for each tenant schema
             options.ReplaceService<IModelCacheKeyFactory, TenantModelCacheKeyFactory<TKey>>();
+
+            // Add the connection interceptor to set search_path on every connection open
+            // This ensures migrations and queries use the correct tenant schema
+            var interceptor = sp.GetRequiredService<TenantSchemaConnectionInterceptor<TKey>>();
+            options.AddInterceptors(interceptor);
         });
 
         services.AddScoped<TContext>(sp =>
@@ -149,10 +157,9 @@ public static class PostgreSqlExtensions
     {
         optionsBuilder.UseNpgsql(connectionString, npgsql =>
         {
-            if (!string.IsNullOrEmpty(schema))
-            {
-                npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema);
-            }
+            // Note: MigrationsHistoryTable is not set here. The caller should use
+            // TenantSchemaConnectionInterceptor to set search_path, which will cause
+            // __EFMigrationsHistory to be created in the current schema.
 
             npgsqlOptionsAction?.Invoke(npgsql);
         });

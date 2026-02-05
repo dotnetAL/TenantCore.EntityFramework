@@ -12,8 +12,8 @@ namespace TenantCore.EntityFramework.IntegrationTests;
 /// <summary>
 /// Integration tests verifying tenant isolation through schema-per-tenant strategy.
 /// These tests ensure that:
-/// 1. Multiple tenant schemas can be provisioned
-/// 2. Tables are created correctly in each schema
+/// 1. Multiple tenant schemas can be provisioned using EF Core migrations
+/// 2. Tables are created correctly in each schema via migrations
 /// 3. Data written to one tenant's schema is completely isolated from other tenants
 /// </summary>
 [Collection("PostgreSql")]
@@ -21,6 +21,7 @@ namespace TenantCore.EntityFramework.IntegrationTests;
 public class TenantIsolationTests
 {
     private readonly PostgreSqlFixture _fixture;
+    private const string MigrationsAssembly = "TenantCore.EntityFramework.IntegrationTests";
 
     public TenantIsolationTests(PostgreSqlFixture fixture)
     {
@@ -38,37 +39,25 @@ public class TenantIsolationTests
             options.UseConnectionString(_fixture.ConnectionString);
         });
 
-        services.AddTenantDbContextPostgreSql<TestDbContext, string>(_fixture.ConnectionString);
+        services.AddTenantDbContextPostgreSql<TestDbContext, string>(
+            _fixture.ConnectionString,
+            MigrationsAssembly);
 
         return services.BuildServiceProvider();
     }
 
     /// <summary>
-    /// Helper to clean up schemas after a test
+    /// Helper to clean up schemas after a test using ITenantManager
     /// </summary>
-    private async Task CleanupSchemasAsync(ISchemaManager schemaManager, params string[] tenantIds)
+    private async Task CleanupTenantsAsync(ITenantManager<string> tenantManager, params string[] tenantIds)
     {
-        var options = new DbContextOptionsBuilder<TestDbContext>()
-            .UseNpgsql(_fixture.ConnectionString)
-            .Options;
-
-        await using var context = new TestDbContext(options);
-
         foreach (var tenantId in tenantIds)
         {
             try
             {
-                var schemaName = $"tenant_{tenantId}";
-                if (await schemaManager.SchemaExistsAsync(context, schemaName))
+                if (await tenantManager.TenantExistsAsync(tenantId))
                 {
-                    await schemaManager.DropSchemaAsync(context, schemaName, cascade: true);
-                }
-
-                // Also try to clean up archived schemas
-                var archivedSchemaName = $"archived_tenant_{tenantId}";
-                if (await schemaManager.SchemaExistsAsync(context, archivedSchemaName))
-                {
-                    await schemaManager.DropSchemaAsync(context, archivedSchemaName, cascade: true);
+                    await tenantManager.DeleteTenantAsync(tenantId, hardDelete: true);
                 }
             }
             catch
@@ -79,34 +68,30 @@ public class TenantIsolationTests
     }
 
     /// <summary>
-    /// Helper method to provision a tenant and create tables in its schema.
-    /// Creates a fresh DbContext with the correct schema to avoid EF model caching issues.
+    /// Helper to clean up schemas directly using ISchemaManager (for archived schemas etc)
     /// </summary>
-    private async Task ProvisionTenantWithTablesAsync(
-        ISchemaManager schemaManager,
-        string tenantId)
+    private async Task CleanupSchemasAsync(ISchemaManager schemaManager, params string[] schemaNames)
     {
-        var schemaName = $"tenant_{tenantId}";
-
-        // Create the schema first
-        var adminOptions = new DbContextOptionsBuilder<TestDbContext>()
+        var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseNpgsql(_fixture.ConnectionString)
             .Options;
 
-        await using var adminContext = new TestDbContext(adminOptions);
-        await schemaManager.CreateSchemaAsync(adminContext, schemaName);
+        await using var context = new TestDbContext(options);
 
-        // Create tables using raw SQL to avoid EF model caching issues
-        // The model cache means HasDefaultSchema is only called once per options instance
-        var createTableSql = $@"
-            CREATE TABLE IF NOT EXISTS ""{schemaName}"".""TestEntities"" (
-                ""Id"" SERIAL PRIMARY KEY,
-                ""Name"" VARCHAR(200) NOT NULL,
-                ""CreatedAt"" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-            )";
-#pragma warning disable EF1002 // Schema name is validated, not user input
-        await adminContext.Database.ExecuteSqlRawAsync(createTableSql);
-#pragma warning restore EF1002
+        foreach (var schemaName in schemaNames)
+        {
+            try
+            {
+                if (await schemaManager.SchemaExistsAsync(context, schemaName))
+                {
+                    await schemaManager.DropSchemaAsync(context, schemaName, cascade: true);
+                }
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
     }
 
     [Fact]
@@ -115,6 +100,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
 
         var tenant1 = $"t1_{Guid.NewGuid():N}"[..15];
@@ -122,9 +108,9 @@ public class TenantIsolationTests
 
         try
         {
-            // Act
-            await ProvisionTenantWithTablesAsync(schemaManager, tenant1);
-            await ProvisionTenantWithTablesAsync(schemaManager, tenant2);
+            // Act - Use ITenantManager.ProvisionTenantAsync which applies EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
 
             // Assert - Verify schemas exist
             var options = new DbContextOptionsBuilder<TestDbContext>()
@@ -140,7 +126,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenant1, tenant2);
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
         }
     }
 
@@ -150,7 +136,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
 
@@ -158,8 +144,8 @@ public class TenantIsolationTests
 
         try
         {
-            // Act
-            await ProvisionTenantWithTablesAsync(schemaManager, tenantId);
+            // Act - Use ITenantManager.ProvisionTenantAsync which applies EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenantId);
 
             // Assert - Set tenant context and verify we can query
             var schemaName = $"tenant_{tenantId}";
@@ -169,7 +155,7 @@ public class TenantIsolationTests
             {
                 await using var context = await contextFactory.CreateDbContextAsync();
 
-                // If no exception is thrown and we can query, the tables were created
+                // If no exception is thrown and we can query, the tables were created by migrations
                 var canQuery = await context.TestEntities.AnyAsync();
                 Assert.False(canQuery, "newly created tenant should have no data");
             }
@@ -180,7 +166,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenantId);
+            await CleanupTenantsAsync(tenantManager, tenantId);
         }
     }
 
@@ -190,21 +176,23 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
 
-        var tenantA = $"tA_{Guid.NewGuid():N}"[..15];
-        var tenantB = $"tB_{Guid.NewGuid():N}"[..15];
+        // Use lowercase tenant IDs - the library sanitizes/lowercases tenant IDs in schema names
+        var tenantA = $"ta_{Guid.NewGuid():N}"[..15];
+        var tenantB = $"tb_{Guid.NewGuid():N}"[..15];
 
         try
         {
-            // Provision both tenants
-            await ProvisionTenantWithTablesAsync(schemaManager, tenantA);
-            await ProvisionTenantWithTablesAsync(schemaManager, tenantB);
+            // Provision both tenants using EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenantA);
+            await tenantManager.ProvisionTenantAsync(tenantB);
 
             // Act - Write data to Tenant A
-            var schemaA = $"tenant_{tenantA}";
+            // Note: Schema names are lowercased by the library's SanitizeTenantId
+            var schemaA = $"tenant_{tenantA.ToLowerInvariant()}";
             tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenantA, schemaA));
 
             try
@@ -219,7 +207,7 @@ public class TenantIsolationTests
             }
 
             // Act - Write data to Tenant B
-            var schemaB = $"tenant_{tenantB}";
+            var schemaB = $"tenant_{tenantB.ToLowerInvariant()}";
             tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenantB, schemaB));
 
             try
@@ -267,7 +255,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenantA, tenantB);
+            await CleanupTenantsAsync(tenantManager, tenantA, tenantB);
         }
     }
 
@@ -277,6 +265,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
@@ -287,10 +276,10 @@ public class TenantIsolationTests
 
         try
         {
-            // Act - Provision all tenants with tables
+            // Act - Provision all tenants using EF Core migrations
             foreach (var tenant in tenants)
             {
-                await ProvisionTenantWithTablesAsync(schemaManager, tenant);
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
             // Assert - All schemas should exist with queryable tables
@@ -322,7 +311,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants.ToArray());
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
         }
     }
 
@@ -335,18 +324,14 @@ public class TenantIsolationTests
             .Select(i => $"c{i}_{Guid.NewGuid():N}"[..15])
             .ToList();
 
-        ISchemaManager? schemaManager = null;
-
         try
         {
-            // Act - Provision tenants concurrently
+            // Act - Provision tenants concurrently using EF Core migrations
             var tasks = tenants.Select(async tenantId =>
             {
                 using var scope = sp.CreateScope();
-                var sm = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
-                schemaManager ??= sm;
-
-                await ProvisionTenantWithTablesAsync(sm, tenantId);
+                var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+                await tenantManager.ProvisionTenantAsync(tenantId);
             });
 
             await Task.WhenAll(tasks);
@@ -371,8 +356,8 @@ public class TenantIsolationTests
         finally
         {
             using var cleanupScope = sp.CreateScope();
-            var cleanupSchemaManager = cleanupScope.ServiceProvider.GetRequiredService<ISchemaManager>();
-            await CleanupSchemasAsync(cleanupSchemaManager, tenants.ToArray());
+            var cleanupTenantManager = cleanupScope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+            await CleanupTenantsAsync(cleanupTenantManager, tenants.ToArray());
         }
     }
 
@@ -382,6 +367,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
@@ -389,8 +375,8 @@ public class TenantIsolationTests
         var tenantId = $"del_{Guid.NewGuid():N}"[..15];
         var schemaName = $"tenant_{tenantId}";
 
-        // Provision and add data
-        await ProvisionTenantWithTablesAsync(schemaManager, tenantId);
+        // Provision and add data using EF Core migrations
+        await tenantManager.ProvisionTenantAsync(tenantId);
 
         tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
         try
@@ -404,15 +390,15 @@ public class TenantIsolationTests
             tenantContextAccessor.SetTenantContext(null);
         }
 
-        // Act - Delete the schema
+        // Act - Delete the tenant using ITenantManager
+        await tenantManager.DeleteTenantAsync(tenantId, hardDelete: true);
+
+        // Assert - Schema should no longer exist
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseNpgsql(_fixture.ConnectionString)
             .Options;
 
         await using var adminContext = new TestDbContext(options);
-        await schemaManager.DropSchemaAsync(adminContext, schemaName, cascade: true);
-
-        // Assert - Schema should no longer exist
         var exists = await schemaManager.SchemaExistsAsync(adminContext, schemaName);
         Assert.False(exists, "schema should not exist after deletion");
     }
@@ -423,6 +409,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
@@ -433,8 +420,8 @@ public class TenantIsolationTests
 
         try
         {
-            // Provision and add data
-            await ProvisionTenantWithTablesAsync(schemaManager, tenantId);
+            // Provision and add data using EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenantId);
 
             tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
             try
@@ -448,23 +435,23 @@ public class TenantIsolationTests
                 tenantContextAccessor.SetTenantContext(null);
             }
 
-            // Act - Archive the tenant by renaming schema
+            // Act - Archive the tenant using ITenantManager
+            await tenantManager.ArchiveTenantAsync(tenantId);
+
+            // Assert - Original schema should not exist
             var options = new DbContextOptionsBuilder<TestDbContext>()
                 .UseNpgsql(_fixture.ConnectionString)
                 .Options;
 
             await using var adminContext = new TestDbContext(options);
-            await schemaManager.RenameSchemaAsync(adminContext, schemaName, archivedSchemaName);
-
-            // Assert - Original schema should not exist
             var existsAfterArchive = await schemaManager.SchemaExistsAsync(adminContext, schemaName);
             Assert.False(existsAfterArchive, "original schema should not exist after archive");
 
             var archivedExists = await schemaManager.SchemaExistsAsync(adminContext, archivedSchemaName);
             Assert.True(archivedExists, "archived schema should exist");
 
-            // Act - Restore the tenant
-            await schemaManager.RenameSchemaAsync(adminContext, archivedSchemaName, schemaName);
+            // Act - Restore the tenant using ITenantManager
+            await tenantManager.RestoreTenantAsync(tenantId);
 
             // Assert - Original schema should exist again and data should be preserved
             var existsAfterRestore = await schemaManager.SchemaExistsAsync(adminContext, schemaName);
@@ -485,7 +472,8 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenantId);
+            await CleanupTenantsAsync(tenantManager, tenantId);
+            await CleanupSchemasAsync(schemaManager, archivedSchemaName);
         }
     }
 
@@ -495,7 +483,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
 
@@ -504,8 +492,9 @@ public class TenantIsolationTests
 
         try
         {
-            await ProvisionTenantWithTablesAsync(schemaManager, tenant1);
-            await ProvisionTenantWithTablesAsync(schemaManager, tenant2);
+            // Provision using EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
 
             // Add distinct data to each tenant
             var schema1 = $"tenant_{tenant1}";
@@ -574,7 +563,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenant1, tenant2);
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
         }
     }
 
@@ -584,6 +573,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
 
         var uniquePrefix = Guid.NewGuid().ToString("N")[..6];
@@ -591,9 +581,10 @@ public class TenantIsolationTests
 
         try
         {
+            // Provision using EF Core migrations
             foreach (var tenant in tenants)
             {
-                await ProvisionTenantWithTablesAsync(schemaManager, tenant);
+                await tenantManager.ProvisionTenantAsync(tenant);
             }
 
             // Act
@@ -613,7 +604,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants);
+            await CleanupTenantsAsync(tenantManager, tenants);
         }
     }
 
@@ -623,7 +614,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
 
@@ -632,8 +623,9 @@ public class TenantIsolationTests
 
         try
         {
-            await ProvisionTenantWithTablesAsync(schemaManager, tenant1);
-            await ProvisionTenantWithTablesAsync(schemaManager, tenant2);
+            // Provision using EF Core migrations
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
 
             var schema1 = $"tenant_{tenant1}";
             var schema2 = $"tenant_{tenant2}";
@@ -698,7 +690,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenant1, tenant2);
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
         }
     }
 
@@ -708,7 +700,7 @@ public class TenantIsolationTests
         // Arrange
         await using var sp = BuildServiceProvider();
         using var scope = sp.CreateScope();
-        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
         var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
         var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
 
@@ -722,10 +714,10 @@ public class TenantIsolationTests
 
         try
         {
-            // Provision all 5 tenants
+            // Provision all 5 tenants using EF Core migrations
             foreach (var tenant in tenants)
             {
-                await ProvisionTenantWithTablesAsync(schemaManager, tenant);
+                await tenantManager.ProvisionTenantAsync(tenant);
                 expectedDataPerTenant[tenant] = new List<string>();
             }
 
@@ -830,7 +822,7 @@ public class TenantIsolationTests
         }
         finally
         {
-            await CleanupSchemasAsync(schemaManager, tenants.ToArray());
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
         }
     }
 }
