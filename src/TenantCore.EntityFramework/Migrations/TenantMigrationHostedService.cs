@@ -18,6 +18,12 @@ public class TenantMigrationHostedService<TContext, TKey> : IHostedService
     private readonly TenantCoreOptions _options;
     private readonly ILogger<TenantMigrationHostedService<TContext, TKey>> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantMigrationHostedService{TContext, TKey}"/> class.
+    /// </summary>
+    /// <param name="migrationRunner">The migration runner.</param>
+    /// <param name="options">The tenant configuration options.</param>
+    /// <param name="logger">The logger instance.</param>
     public TenantMigrationHostedService(
         TenantMigrationRunner<TContext, TKey> migrationRunner,
         TenantCoreOptions options,
@@ -28,6 +34,7 @@ public class TenantMigrationHostedService<TContext, TKey> : IHostedService
         _logger = logger;
     }
 
+    /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (!_options.Migrations.ApplyOnStartup)
@@ -50,5 +57,6 @@ public class TenantMigrationHostedService<TContext, TKey> : IHostedService
         }
     }
 
+    /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

@@ -36,10 +36,20 @@ public abstract class TenantDbContext<TKey> : DbContext where TKey : notnull
     /// </summary>
     public bool HasTenantContext => _tenantContextAccessor?.TenantContext?.IsValid == true;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantDbContext{TKey}"/> class.
+    /// </summary>
+    /// <param name="options">The DbContext options.</param>
     protected TenantDbContext(DbContextOptions options) : base(options)
     {
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantDbContext{TKey}"/> class with tenant context.
+    /// </summary>
+    /// <param name="options">The DbContext options.</param>
+    /// <param name="tenantContextAccessor">The tenant context accessor.</param>
+    /// <param name="tenantOptions">The tenant configuration options.</param>
     protected TenantDbContext(
         DbContextOptions options,
         ITenantContextAccessor<TKey> tenantContextAccessor,

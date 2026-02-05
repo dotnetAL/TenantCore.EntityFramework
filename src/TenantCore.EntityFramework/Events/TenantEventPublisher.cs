@@ -12,6 +12,11 @@ public class TenantEventPublisher<TKey> : ITenantEventPublisher<TKey> where TKey
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<TenantEventPublisher<TKey>> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantEventPublisher{TKey}"/> class.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider for resolving subscribers.</param>
+    /// <param name="logger">The logger instance.</param>
     public TenantEventPublisher(
         IServiceProvider serviceProvider,
         ILogger<TenantEventPublisher<TKey>> logger)

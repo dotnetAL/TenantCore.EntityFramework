@@ -18,6 +18,11 @@ public class TenantHealthCheck<TContext, TKey> : IHealthCheck
     private readonly IServiceProvider _serviceProvider;
     private readonly ITenantStrategy<TKey> _strategy;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantHealthCheck{TContext, TKey}"/> class.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider.</param>
+    /// <param name="strategy">The tenant isolation strategy.</param>
     public TenantHealthCheck(
         IServiceProvider serviceProvider,
         ITenantStrategy<TKey> strategy)
@@ -26,6 +31,7 @@ public class TenantHealthCheck<TContext, TKey> : IHealthCheck
         _strategy = strategy;
     }
 
+    /// <inheritdoc />
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
@@ -88,6 +94,12 @@ public class TenantSpecificHealthCheck<TContext, TKey> : IHealthCheck
     private readonly ITenantContextAccessor<TKey> _contextAccessor;
     private readonly ITenantStrategy<TKey> _strategy;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantSpecificHealthCheck{TContext, TKey}"/> class.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider.</param>
+    /// <param name="contextAccessor">The tenant context accessor.</param>
+    /// <param name="strategy">The tenant isolation strategy.</param>
     public TenantSpecificHealthCheck(
         IServiceProvider serviceProvider,
         ITenantContextAccessor<TKey> contextAccessor,
@@ -98,6 +110,7 @@ public class TenantSpecificHealthCheck<TContext, TKey> : IHealthCheck
         _strategy = strategy;
     }
 
+    /// <inheritdoc />
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)

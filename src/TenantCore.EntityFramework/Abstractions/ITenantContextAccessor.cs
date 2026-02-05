@@ -44,11 +44,20 @@ public class TenantContext<TKey> where TKey : notnull
     /// </summary>
     public IDictionary<string, object> Properties { get; } = new Dictionary<string, object>();
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantContext{TKey}"/> class.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier.</param>
     public TenantContext(TKey tenantId)
     {
         TenantId = tenantId;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantContext{TKey}"/> class with a schema name.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier.</param>
+    /// <param name="schemaName">The database schema name for this tenant.</param>
     public TenantContext(TKey tenantId, string schemaName) : this(tenantId)
     {
         SchemaName = schemaName;

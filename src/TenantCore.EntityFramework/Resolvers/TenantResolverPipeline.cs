@@ -20,6 +20,16 @@ public class TenantResolverPipeline<TKey> : ITenantResolverPipeline<TKey> where 
     private readonly IMemoryCache? _cache;
     private readonly ILogger<TenantResolverPipeline<TKey>> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantResolverPipeline{TKey}"/> class.
+    /// </summary>
+    /// <param name="resolvers">The tenant resolvers to use in the pipeline.</param>
+    /// <param name="contextAccessor">The tenant context accessor.</param>
+    /// <param name="eventPublisher">The event publisher.</param>
+    /// <param name="options">The tenant configuration options.</param>
+    /// <param name="logger">The logger instance.</param>
+    /// <param name="validator">Optional tenant validator.</param>
+    /// <param name="cache">Optional memory cache for tenant validation results.</param>
     public TenantResolverPipeline(
         IEnumerable<ITenantResolver<TKey>> resolvers,
         ITenantContextAccessor<TKey> contextAccessor,

@@ -70,14 +70,26 @@ public interface ITenantManager<TKey> where TKey : notnull
 /// </summary>
 public class TenantAlreadyExistsException : Exception
 {
+    /// <summary>
+    /// Gets the tenant identifier that caused the exception.
+    /// </summary>
     public object TenantId { get; }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantAlreadyExistsException"/> class.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier that already exists.</param>
     public TenantAlreadyExistsException(object tenantId)
         : base($"Tenant '{tenantId}' already exists.")
     {
         TenantId = tenantId;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantAlreadyExistsException"/> class with an inner exception.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier that already exists.</param>
+    /// <param name="innerException">The exception that caused this exception.</param>
     public TenantAlreadyExistsException(object tenantId, Exception innerException)
         : base($"Tenant '{tenantId}' already exists.", innerException)
     {
@@ -90,14 +102,26 @@ public class TenantAlreadyExistsException : Exception
 /// </summary>
 public class TenantNotFoundException : Exception
 {
+    /// <summary>
+    /// Gets the tenant identifier that was not found.
+    /// </summary>
     public object TenantId { get; }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantNotFoundException"/> class.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier that was not found.</param>
     public TenantNotFoundException(object tenantId)
         : base($"Tenant '{tenantId}' was not found.")
     {
         TenantId = tenantId;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantNotFoundException"/> class with an inner exception.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier that was not found.</param>
+    /// <param name="innerException">The exception that caused this exception.</param>
     public TenantNotFoundException(object tenantId, Exception innerException)
         : base($"Tenant '{tenantId}' was not found.", innerException)
     {

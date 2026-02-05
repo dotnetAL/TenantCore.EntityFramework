@@ -26,6 +26,15 @@ public class TenantMigrationRunner<TContext, TKey>
     private readonly ITenantEventPublisher<TKey> _eventPublisher;
     private readonly ILogger<TenantMigrationRunner<TContext, TKey>> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantMigrationRunner{TContext, TKey}"/> class.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider.</param>
+    /// <param name="options">The tenant configuration options.</param>
+    /// <param name="strategy">The tenant isolation strategy.</param>
+    /// <param name="contextAccessor">The tenant context accessor.</param>
+    /// <param name="eventPublisher">The event publisher.</param>
+    /// <param name="logger">The logger instance.</param>
     public TenantMigrationRunner(
         IServiceProvider serviceProvider,
         TenantCoreOptions options,

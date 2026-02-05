@@ -14,11 +14,19 @@ public class TenantMiddleware<TKey> where TKey : notnull
 {
     private readonly RequestDelegate _next;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantMiddleware{TKey}"/> class.
+    /// </summary>
+    /// <param name="next">The next middleware in the pipeline.</param>
     public TenantMiddleware(RequestDelegate next)
     {
         _next = next;
     }
 
+    /// <summary>
+    /// Invokes the middleware to resolve the tenant for the current request.
+    /// </summary>
+    /// <param name="context">The HTTP context.</param>
     public async Task InvokeAsync(HttpContext context)
     {
         var pipeline = context.RequestServices.GetRequiredService<ITenantResolverPipeline<TKey>>();

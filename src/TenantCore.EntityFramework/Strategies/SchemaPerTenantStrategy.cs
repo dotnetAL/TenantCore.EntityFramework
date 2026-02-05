@@ -18,6 +18,12 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     /// <inheritdoc />
     public string Name => "SchemaPerTenant";
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SchemaPerTenantStrategy{TKey}"/> class.
+    /// </summary>
+    /// <param name="options">The tenant configuration options.</param>
+    /// <param name="schemaManager">The schema manager.</param>
+    /// <param name="logger">The logger instance.</param>
     public SchemaPerTenantStrategy(
         TenantCoreOptions options,
         ISchemaManager schemaManager,

@@ -19,10 +19,17 @@ public sealed class SharedEntityAttribute : Attribute
     /// </summary>
     public string? TableName { get; set; }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SharedEntityAttribute"/> class.
+    /// </summary>
     public SharedEntityAttribute()
     {
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SharedEntityAttribute"/> class with a specified schema.
+    /// </summary>
+    /// <param name="schema">The schema name for this shared entity.</param>
     public SharedEntityAttribute(string schema)
     {
         Schema = schema;

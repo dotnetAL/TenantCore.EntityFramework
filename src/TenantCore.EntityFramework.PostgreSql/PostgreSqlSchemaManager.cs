@@ -11,6 +11,10 @@ public class PostgreSqlSchemaManager : ISchemaManager
 {
     private readonly ILogger<PostgreSqlSchemaManager> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PostgreSqlSchemaManager"/> class.
+    /// </summary>
+    /// <param name="logger">The logger instance.</param>
     public PostgreSqlSchemaManager(ILogger<PostgreSqlSchemaManager> logger)
     {
         _logger = logger;

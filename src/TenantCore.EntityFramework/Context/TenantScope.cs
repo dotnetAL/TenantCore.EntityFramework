@@ -76,6 +76,11 @@ public class TenantScopeFactory<TKey> : ITenantScopeFactory<TKey> where TKey : n
     private readonly ITenantContextAccessor<TKey> _accessor;
     private readonly Configuration.SchemaPerTenantOptions _schemaOptions;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TenantScopeFactory{TKey}"/> class.
+    /// </summary>
+    /// <param name="accessor">The tenant context accessor.</param>
+    /// <param name="options">The tenant configuration options.</param>
     public TenantScopeFactory(
         ITenantContextAccessor<TKey> accessor,
         Configuration.TenantCoreOptions options)
