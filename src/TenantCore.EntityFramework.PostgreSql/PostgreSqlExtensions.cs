@@ -57,6 +57,30 @@ public static class PostgreSqlExtensions
         where TContext : TenantDbContext<TKey>
         where TKey : notnull
     {
+        return services.AddTenantDbContextPostgreSql<TContext, TKey>(
+            connectionString,
+            migrationsAssembly: null,
+            npgsqlOptionsAction);
+    }
+
+    /// <summary>
+    /// Adds a tenant-aware DbContext configured for PostgreSQL with migrations from a separate assembly.
+    /// </summary>
+    /// <typeparam name="TContext">The DbContext type.</typeparam>
+    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <param name="connectionString">The PostgreSQL connection string.</param>
+    /// <param name="migrationsAssembly">The name of the assembly containing migrations. If null, uses the DbContext's assembly.</param>
+    /// <param name="npgsqlOptionsAction">Optional action to configure Npgsql options.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddTenantDbContextPostgreSql<TContext, TKey>(
+        this IServiceCollection services,
+        string connectionString,
+        string? migrationsAssembly,
+        Action<Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder>? npgsqlOptionsAction = null)
+        where TContext : TenantDbContext<TKey>
+        where TKey : notnull
+    {
         services.AddTenantCorePostgreSql();
 
         services.AddDbContextFactory<TContext>((sp, options) =>
@@ -68,6 +92,12 @@ public static class PostgreSqlExtensions
 
             options.UseNpgsql(connectionString, npgsql =>
             {
+                // Set migrations assembly if specified
+                if (!string.IsNullOrEmpty(migrationsAssembly))
+                {
+                    npgsql.MigrationsAssembly(migrationsAssembly);
+                }
+
                 // Set migrations history table per tenant schema to ensure
                 // each tenant tracks its own migration state independently
                 if (!string.IsNullOrEmpty(schema))
