@@ -1,8 +1,10 @@
 # TenantCore.EntityFramework
 
-A robust, extensible multi-tenancy solution for Entity Framework Core with initial support for schema-per-tenant isolation on PostgreSQL.
+A robust, extensible multi-tenancy solution for Entity Framework Core with schema-per-tenant isolation on PostgreSQL.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![NuGet](https://img.shields.io/nuget/v/TenantCore.EntityFramework.svg)](https://www.nuget.org/packages/TenantCore.EntityFramework)
+[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4)](https://dotnet.microsoft.com/)
 
 ## Features
 
@@ -82,7 +84,7 @@ app.MapPost("/api/tenants/{tenantId}", async (
 
 ## Tenant Resolution
 
-TenantCore includes several built-in tenant resolvers:
+TenantCore includes several built-in tenant resolvers. Multiple resolvers can be registered and will be evaluated in priority order (lower priority values run first).
 
 ### Header-Based (Recommended for APIs)
 
@@ -101,6 +103,26 @@ builder.Services.AddClaimsTenantResolver<string>("tenant_id");
 ```csharp
 builder.Services.AddSubdomainTenantResolver<string>("example.com");
 // tenant1.example.com -> tenant1
+```
+
+### Query String-Based
+
+```csharp
+builder.Services.AddScoped<ITenantResolver<string>>(sp =>
+    new QueryStringTenantResolver<string>(
+        sp.GetRequiredService<IHttpContextAccessor>(),
+        "tenant"));
+// /api/products?tenant=tenant1 -> tenant1
+```
+
+### Route Value-Based
+
+```csharp
+builder.Services.AddScoped<ITenantResolver<string>>(sp =>
+    new RouteValueTenantResolver<string>(
+        sp.GetRequiredService<IHttpContextAccessor>(),
+        "tenantId"));
+// /api/{tenantId}/products -> extracts from route
 ```
 
 ### Custom Resolver
@@ -176,6 +198,74 @@ await tenantManager.DeleteTenantAsync("tenant-id", hardDelete: false);
 await tenantManager.DeleteTenantAsync("tenant-id", hardDelete: true);
 ```
 
+## Tenant Scoping
+
+Use `ITenantScopeFactory` to temporarily switch tenant context for background jobs or cross-tenant operations:
+
+```csharp
+public class CrossTenantService
+{
+    private readonly ITenantScopeFactory<string> _scopeFactory;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
+
+    public CrossTenantService(
+        ITenantScopeFactory<string> scopeFactory,
+        IDbContextFactory<AppDbContext> dbFactory)
+    {
+        _scopeFactory = scopeFactory;
+        _dbFactory = dbFactory;
+    }
+
+    public async Task ProcessAllTenantsAsync(IEnumerable<string> tenantIds)
+    {
+        foreach (var tenantId in tenantIds)
+        {
+            // Create a scope for the target tenant
+            using var scope = _scopeFactory.CreateScope(tenantId);
+            await using var db = await _dbFactory.CreateDbContextAsync();
+
+            // All operations here use the scoped tenant's schema
+            var products = await db.Products.ToListAsync();
+            // ... process products
+        }
+    }
+}
+```
+
+## Data Seeding
+
+Seed initial data when provisioning new tenants:
+
+```csharp
+public class TenantDataSeeder : ITenantSeeder<AppDbContext, string>
+{
+    public int Order => 0; // Lower values run first
+
+    public async Task SeedAsync(
+        AppDbContext context,
+        string tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        context.Products.Add(new Product
+        {
+            Name = "Welcome Product",
+            Description = "Initial product for new tenants"
+        });
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    // Required interface implementation
+    Task ITenantSeeder<string>.SeedAsync(DbContext context, string tenantId, CancellationToken ct)
+        => SeedAsync((AppDbContext)context, tenantId, ct);
+
+    Task ITenantSeeder.SeedAsync(DbContext context, object tenantId, CancellationToken ct)
+        => SeedAsync((AppDbContext)context, (string)tenantId, ct);
+}
+
+// Register in DI
+builder.Services.AddScoped<ITenantSeeder<string>, TenantDataSeeder>();
+```
+
 ## Events
 
 Subscribe to tenant lifecycle events:
@@ -207,7 +297,7 @@ builder.Services.AddTenantHealthChecks<AppDbContext, string>("tenants");
 builder.Services.AddTenantCore<string>(options =>
 {
     // Connection
-    options.UseConnectionString(connectionString);
+    options.UsePostgreSql(connectionString);
 
     // Schema isolation
     options.UseSchemaPerTenant(schema =>
@@ -231,6 +321,16 @@ builder.Services.AddTenantCore<string>(options =>
     options.EnableCaching(TimeSpan.FromMinutes(5));
     options.DisableTenantValidation();
 });
+```
+
+### Separate Migrations Assembly
+
+When your migrations are in a separate assembly (common in clean architecture):
+
+```csharp
+builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(
+    connectionString,
+    migrationsAssembly: "MyApp.Infrastructure");
 ```
 
 ## Shared Entities
@@ -265,6 +365,22 @@ protected override void ConfigureSharedEntities(ModelBuilder modelBuilder)
 | SQL Server | Coming in v2.0                       | 🔜 Planned |
 | MySQL      | Coming in v2.0                       | 🔜 Planned |
 
+## Sample Project
+
+A complete sample Web API is included in the `samples/TenantCore.Sample.WebApi` directory, demonstrating:
+
+- Tenant provisioning and management endpoints
+- Tenant-scoped CRUD operations
+- Health check configuration
+- Swagger/OpenAPI integration
+
+Run the sample:
+
+```bash
+cd samples/TenantCore.Sample.WebApi
+dotnet run
+```
+
 ## Requirements
 
 - .NET 8.0 or .NET 10.0
@@ -277,4 +393,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+Contributions are welcome! Please open an issue or submit a pull request on [GitHub](https://github.com/dotnetAL/TenantCore.EntityFramework).
