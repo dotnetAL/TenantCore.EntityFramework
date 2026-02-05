@@ -1,4 +1,3 @@
-using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -218,14 +217,12 @@ public class TenantMigrationTests
             }
 
             // Assert - Each tenant should have the same tables
-            var expectedTables = new[] { "Categories", "Products" };
-
             foreach (var tenant in tenants)
             {
                 var tables = await GetTablesInSchemaAsync(tenant);
 
-                tables.Should().Contain("Products", $"tenant {tenant} should have Products table");
-                tables.Should().Contain("Categories", $"tenant {tenant} should have Categories table");
+                Assert.Contains("Products", tables);
+                Assert.Contains("Categories", tables);
             }
 
             // Verify each tenant can independently store and retrieve data
@@ -257,10 +254,10 @@ public class TenantMigrationTests
                         .Include(p => p.Category)
                         .FirstOrDefaultAsync();
 
-                    savedProduct.Should().NotBeNull();
-                    savedProduct!.Name.Should().Be($"Product for {tenant}");
-                    savedProduct.Category.Should().NotBeNull();
-                    savedProduct.Category!.Name.Should().Be($"Category for {tenant}");
+                    Assert.NotNull(savedProduct);
+                    Assert.Equal($"Product for {tenant}", savedProduct.Name);
+                    Assert.NotNull(savedProduct.Category);
+                    Assert.Equal($"Category for {tenant}", savedProduct.Category.Name);
                 }
                 finally
                 {
@@ -303,7 +300,7 @@ public class TenantMigrationTests
             foreach (var tenant in tenants)
             {
                 var columnExists = await ColumnExistsAsync(tenant, "Products", newColumnName);
-                columnExists.Should().BeFalse($"tenant {tenant} should NOT have {newColumnName} column before migration");
+                Assert.False(columnExists, $"tenant {tenant} should NOT have {newColumnName} column before migration");
             }
 
             // Step 2: Apply a new "migration" to all tenants (add StockQuantity column)
@@ -316,7 +313,7 @@ public class TenantMigrationTests
             foreach (var tenant in tenants)
             {
                 var columnExists = await ColumnExistsAsync(tenant, "Products", newColumnName);
-                columnExists.Should().BeTrue($"tenant {tenant} should have {newColumnName} column after migration");
+                Assert.True(columnExists, $"tenant {tenant} should have {newColumnName} column after migration");
             }
 
             // Verify we can use the new column in each tenant
@@ -344,8 +341,7 @@ public class TenantMigrationTests
                     command.CommandText = selectSql;
                     var stockValue = await command.ExecuteScalarAsync();
 
-                    Convert.ToInt32(stockValue).Should().Be(100,
-                        $"tenant {tenant} should be able to read data from new column");
+                    Assert.Equal(100, Convert.ToInt32(stockValue));
                 }
                 finally
                 {
@@ -394,9 +390,9 @@ public class TenantMigrationTests
             var tenant2HasColumn = await ColumnExistsAsync(tenant2, "Products", newColumnName);
             var tenant3HasColumn = await ColumnExistsAsync(tenant3, "Products", newColumnName);
 
-            tenant1HasColumn.Should().BeTrue("tenant1 should have the new column");
-            tenant2HasColumn.Should().BeTrue("tenant2 should have the new column");
-            tenant3HasColumn.Should().BeFalse("tenant3 should NOT have the new column (migration not applied)");
+            Assert.True(tenant1HasColumn, "tenant1 should have the new column");
+            Assert.True(tenant2HasColumn, "tenant2 should have the new column");
+            Assert.False(tenant3HasColumn, "tenant3 should NOT have the new column (migration not applied)");
 
             // Verify tenant3 can still operate normally without the new column
             var schemaName3 = $"tenant_{tenant3}";
@@ -412,8 +408,8 @@ public class TenantMigrationTests
                 await context.SaveChangesAsync();
 
                 var savedProduct = await context.Products.FirstOrDefaultAsync();
-                savedProduct.Should().NotBeNull();
-                savedProduct!.Name.Should().Be("Tenant3 Product");
+                Assert.NotNull(savedProduct);
+                Assert.Equal("Tenant3 Product", savedProduct.Name);
             }
             finally
             {
@@ -472,7 +468,7 @@ public class TenantMigrationTests
                 foreach (var (_, columnName, _) in migrations)
                 {
                     var hasColumn = await ColumnExistsAsync(tenant, "Products", columnName);
-                    hasColumn.Should().BeTrue($"tenant {tenant} should have column {columnName}");
+                    Assert.True(hasColumn, $"tenant {tenant} should have column {columnName}");
                 }
 
                 // Verify we can query with all columns
@@ -500,10 +496,10 @@ public class TenantMigrationTests
                 var weight = reader.GetDecimal(2);
                 var isActive = reader.GetBoolean(3);
 
-                id.Should().BeGreaterThan(0);
-                stockQty.Should().Be(50);
-                weight.Should().Be(1.5m);
-                isActive.Should().BeTrue();
+                Assert.True(id > 0);
+                Assert.Equal(50, stockQty);
+                Assert.Equal(1.5m, weight);
+                Assert.True(isActive);
             }
         }
         finally

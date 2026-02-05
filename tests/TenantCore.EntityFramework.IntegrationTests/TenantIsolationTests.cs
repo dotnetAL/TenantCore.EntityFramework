@@ -1,4 +1,3 @@
-using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -136,8 +135,8 @@ public class TenantIsolationTests
             var schema1Exists = await schemaManager.SchemaExistsAsync(context, $"tenant_{tenant1}");
             var schema2Exists = await schemaManager.SchemaExistsAsync(context, $"tenant_{tenant2}");
 
-            schema1Exists.Should().BeTrue("tenant1 schema should exist in database");
-            schema2Exists.Should().BeTrue("tenant2 schema should exist in database");
+            Assert.True(schema1Exists, "tenant1 schema should exist in database");
+            Assert.True(schema2Exists, "tenant2 schema should exist in database");
         }
         finally
         {
@@ -172,7 +171,7 @@ public class TenantIsolationTests
 
                 // If no exception is thrown and we can query, the tables were created
                 var canQuery = await context.TestEntities.AnyAsync();
-                canQuery.Should().BeFalse("newly created tenant should have no data");
+                Assert.False(canQuery, "newly created tenant should have no data");
             }
             finally
             {
@@ -241,9 +240,9 @@ public class TenantIsolationTests
                 await using var readContextA = await contextFactory.CreateDbContextAsync();
                 var tenantAData = await readContextA.TestEntities.ToListAsync();
 
-                tenantAData.Should().HaveCount(1);
-                tenantAData.Should().ContainSingle(e => e.Name == "Tenant A Data");
-                tenantAData.Should().NotContain(e => e.Name == "Tenant B Data");
+                Assert.Single(tenantAData);
+                Assert.Contains(tenantAData, e => e.Name == "Tenant A Data");
+                Assert.DoesNotContain(tenantAData, e => e.Name == "Tenant B Data");
             }
             finally
             {
@@ -257,9 +256,9 @@ public class TenantIsolationTests
                 await using var readContextB = await contextFactory.CreateDbContextAsync();
                 var tenantBData = await readContextB.TestEntities.ToListAsync();
 
-                tenantBData.Should().HaveCount(1);
-                tenantBData.Should().ContainSingle(e => e.Name == "Tenant B Data");
-                tenantBData.Should().NotContain(e => e.Name == "Tenant A Data");
+                Assert.Single(tenantBData);
+                Assert.Contains(tenantBData, e => e.Name == "Tenant B Data");
+                Assert.DoesNotContain(tenantBData, e => e.Name == "Tenant A Data");
             }
             finally
             {
@@ -305,7 +304,7 @@ public class TenantIsolationTests
             {
                 var schemaName = $"tenant_{tenant}";
                 var schemaExists = await schemaManager.SchemaExistsAsync(context, schemaName);
-                schemaExists.Should().BeTrue($"schema for tenant {tenant} should exist");
+                Assert.True(schemaExists, $"schema for tenant {tenant} should exist");
 
                 // Verify we can query the tables in each schema
                 tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schemaName));
@@ -313,7 +312,7 @@ public class TenantIsolationTests
                 {
                     await using var tenantContext = await contextFactory.CreateDbContextAsync();
                     var count = await tenantContext.TestEntities.CountAsync();
-                    count.Should().Be(0, $"tenant {tenant} should have empty tables");
+                    Assert.Equal(0, count);
                 }
                 finally
                 {
@@ -366,7 +365,7 @@ public class TenantIsolationTests
             {
                 var schemaName = $"tenant_{tenant}";
                 var exists = await verifySchemaManager.SchemaExistsAsync(context, schemaName);
-                exists.Should().BeTrue($"tenant {tenant} schema should exist after concurrent provisioning");
+                Assert.True(exists, $"tenant {tenant} schema should exist after concurrent provisioning");
             }
         }
         finally
@@ -415,7 +414,7 @@ public class TenantIsolationTests
 
         // Assert - Schema should no longer exist
         var exists = await schemaManager.SchemaExistsAsync(adminContext, schemaName);
-        exists.Should().BeFalse("schema should not exist after deletion");
+        Assert.False(exists, "schema should not exist after deletion");
     }
 
     [Fact]
@@ -459,24 +458,25 @@ public class TenantIsolationTests
 
             // Assert - Original schema should not exist
             var existsAfterArchive = await schemaManager.SchemaExistsAsync(adminContext, schemaName);
-            existsAfterArchive.Should().BeFalse("original schema should not exist after archive");
+            Assert.False(existsAfterArchive, "original schema should not exist after archive");
 
             var archivedExists = await schemaManager.SchemaExistsAsync(adminContext, archivedSchemaName);
-            archivedExists.Should().BeTrue("archived schema should exist");
+            Assert.True(archivedExists, "archived schema should exist");
 
             // Act - Restore the tenant
             await schemaManager.RenameSchemaAsync(adminContext, archivedSchemaName, schemaName);
 
             // Assert - Original schema should exist again and data should be preserved
             var existsAfterRestore = await schemaManager.SchemaExistsAsync(adminContext, schemaName);
-            existsAfterRestore.Should().BeTrue("schema should exist after restore");
+            Assert.True(existsAfterRestore, "schema should exist after restore");
 
             tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
             try
             {
                 await using var context = await contextFactory.CreateDbContextAsync();
                 var data = await context.TestEntities.ToListAsync();
-                data.Should().ContainSingle(e => e.Name == "Archived Data");
+                Assert.Single(data);
+                Assert.Equal("Archived Data", data[0].Name);
             }
             finally
             {
@@ -547,10 +547,10 @@ public class TenantIsolationTests
             {
                 await using var readCtx1 = await contextFactory.CreateDbContextAsync();
                 var count1 = await readCtx1.TestEntities.CountAsync();
-                count1.Should().Be(10, "tenant1 should have exactly 10 entities");
+                Assert.Equal(10, count1);
 
                 var names1 = await readCtx1.TestEntities.Select(e => e.Name).ToListAsync();
-                names1.Should().OnlyContain(n => n.StartsWith("Tenant1_"), "tenant1 should only see tenant1 data");
+                Assert.All(names1, n => Assert.StartsWith("Tenant1_", n));
             }
             finally
             {
@@ -562,10 +562,10 @@ public class TenantIsolationTests
             {
                 await using var readCtx2 = await contextFactory.CreateDbContextAsync();
                 var count2 = await readCtx2.TestEntities.CountAsync();
-                count2.Should().Be(5, "tenant2 should have exactly 5 entities");
+                Assert.Equal(5, count2);
 
                 var names2 = await readCtx2.TestEntities.Select(e => e.Name).ToListAsync();
-                names2.Should().OnlyContain(n => n.StartsWith("Tenant2_"), "tenant2 should only see tenant2 data");
+                Assert.All(names2, n => Assert.StartsWith("Tenant2_", n));
             }
             finally
             {
@@ -608,7 +608,7 @@ public class TenantIsolationTests
             // Assert
             foreach (var tenant in tenants)
             {
-                schemaList.Should().Contain($"tenant_{tenant}", $"schema for tenant {tenant} should be in the list");
+                Assert.Contains($"tenant_{tenant}", schemaList);
             }
         }
         finally
@@ -673,8 +673,8 @@ public class TenantIsolationTests
                 {
                     await using var ctx1 = await contextFactory.CreateDbContextAsync();
                     var data1 = await ctx1.TestEntities.FirstOrDefaultAsync();
-                    data1.Should().NotBeNull();
-                    data1!.Name.Should().Be("Tenant1_Unique_Data");
+                    Assert.NotNull(data1);
+                    Assert.Equal("Tenant1_Unique_Data", data1.Name);
                 }
                 finally
                 {
@@ -687,8 +687,8 @@ public class TenantIsolationTests
                 {
                     await using var ctx2 = await contextFactory.CreateDbContextAsync();
                     var data2 = await ctx2.TestEntities.FirstOrDefaultAsync();
-                    data2.Should().NotBeNull();
-                    data2!.Name.Should().Be("Tenant2_Unique_Data");
+                    Assert.NotNull(data2);
+                    Assert.Equal("Tenant2_Unique_Data", data2.Name);
                 }
                 finally
                 {
@@ -770,14 +770,13 @@ public class TenantIsolationTests
                     var records = await context.TestEntities.ToListAsync();
 
                     // Should have exactly 5 records
-                    records.Should().HaveCount(5, $"tenant {tenant} should have exactly 5 records");
+                    Assert.Equal(5, records.Count);
 
                     // All records should belong to this tenant
                     var recordNames = records.Select(r => r.Name).ToList();
                     foreach (var expectedName in expectedDataPerTenant[tenant])
                     {
-                        recordNames.Should().Contain(expectedName,
-                            $"tenant {tenant} should contain its own record '{expectedName}'");
+                        Assert.Contains(expectedName, recordNames);
                     }
 
                     // No records from other tenants should be present
@@ -785,8 +784,7 @@ public class TenantIsolationTests
                     {
                         foreach (var otherTenantRecord in expectedDataPerTenant[otherTenant])
                         {
-                            recordNames.Should().NotContain(otherTenantRecord,
-                                $"tenant {tenant} should NOT contain record '{otherTenantRecord}' from tenant {otherTenant}");
+                            Assert.DoesNotContain(otherTenantRecord, recordNames);
                         }
                     }
                 }
@@ -815,16 +813,14 @@ public class TenantIsolationTests
                     var foundRecord = await context.TestEntities
                         .FirstOrDefaultAsync(e => e.Name == tenant1SpecificRecord);
 
-                    foundRecord.Should().BeNull(
-                        $"record '{tenant1SpecificRecord}' from tenant {tenant1} should NOT be found in tenant {otherTenant}");
+                    Assert.Null(foundRecord);
 
                     // Also verify by name pattern - no records starting with tenant1's prefix
                     var leakedRecords = await context.TestEntities
                         .Where(e => e.Name.StartsWith(tenant1))
                         .ToListAsync();
 
-                    leakedRecords.Should().BeEmpty(
-                        $"tenant {otherTenant} should have no records belonging to tenant {tenant1}");
+                    Assert.Empty(leakedRecords);
                 }
                 finally
                 {

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using TenantCore.EntityFramework.PostgreSql;
@@ -36,7 +35,7 @@ public class PostgreSqlSchemaManagerTests
 
             // Assert
             var exists = await schemaManager.SchemaExistsAsync(context, schemaName);
-            exists.Should().BeTrue();
+            Assert.True(exists);
         }
         finally
         {
@@ -64,7 +63,7 @@ public class PostgreSqlSchemaManagerTests
 
         // Assert
         var exists = await schemaManager.SchemaExistsAsync(context, schemaName);
-        exists.Should().BeFalse();
+        Assert.False(exists);
     }
 
     [Fact]
@@ -83,7 +82,7 @@ public class PostgreSqlSchemaManagerTests
         var exists = await schemaManager.SchemaExistsAsync(context, "public");
 
         // Assert
-        exists.Should().BeTrue();
+        Assert.True(exists);
     }
 
     [Fact]
@@ -102,7 +101,7 @@ public class PostgreSqlSchemaManagerTests
         var exists = await schemaManager.SchemaExistsAsync(context, "nonexistent_schema_xyz");
 
         // Assert
-        exists.Should().BeFalse();
+        Assert.False(exists);
     }
 
     [Fact]
@@ -127,10 +126,11 @@ public class PostgreSqlSchemaManagerTests
 
             // Act
             var schemas = await schemaManager.GetSchemasAsync(context, prefix);
+            var schemaList = schemas.ToList();
 
             // Assert
-            schemas.Should().Contain(schema1);
-            schemas.Should().Contain(schema2);
+            Assert.Contains(schema1, schemaList);
+            Assert.Contains(schema2, schemaList);
         }
         finally
         {
@@ -165,8 +165,8 @@ public class PostgreSqlSchemaManagerTests
             var oldExists = await schemaManager.SchemaExistsAsync(context, oldName);
             var newExists = await schemaManager.SchemaExistsAsync(context, newName);
 
-            oldExists.Should().BeFalse();
-            newExists.Should().BeTrue();
+            Assert.False(oldExists);
+            Assert.True(newExists);
         }
         finally
         {
@@ -187,10 +187,8 @@ public class PostgreSqlSchemaManagerTests
 
         await using var context = new TestDbContext(options);
 
-        // Act
-        var act = () => schemaManager.CreateSchemaAsync(context, "invalid-name-with-dashes");
-
-        // Assert
-        await act.Should().ThrowAsync<ArgumentException>();
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => schemaManager.CreateSchemaAsync(context, "invalid-name-with-dashes"));
     }
 }
