@@ -84,7 +84,15 @@ app.MapPost("/api/tenants/{tenantId}", async (
 
 ## Tenant Resolution
 
-TenantCore includes several built-in tenant resolvers. Multiple resolvers can be registered and will be evaluated in priority order (lower priority values run first).
+TenantCore includes several built-in tenant resolvers. Multiple resolvers can be registered and will be evaluated in priority order (higher priority values run first).
+
+| Resolver | Default Priority | Registration Helper |
+|----------|-----------------|---------------------|
+| Claims | 200 | `AddClaimsTenantResolver<TKey>()` |
+| Route Value | 150 | Manual `AddScoped` |
+| Header | 100 | `AddHeaderTenantResolver<TKey>()` |
+| Subdomain | 50 | `AddSubdomainTenantResolver<TKey>()` |
+| Query String | 25 | Manual `AddScoped` |
 
 ### Header-Based (Recommended for APIs)
 
@@ -237,29 +245,22 @@ public class CrossTenantService
 Seed initial data when provisioning new tenants:
 
 ```csharp
-public class TenantDataSeeder : ITenantSeeder<AppDbContext, string>
+public class TenantDataSeeder : ITenantSeeder<string>
 {
     public int Order => 0; // Lower values run first
 
     public async Task SeedAsync(
-        AppDbContext context,
+        DbContext context,
         string tenantId,
         CancellationToken cancellationToken = default)
     {
-        context.Products.Add(new Product
+        context.Set<Product>().Add(new Product
         {
             Name = "Welcome Product",
             Description = "Initial product for new tenants"
         });
         await context.SaveChangesAsync(cancellationToken);
     }
-
-    // Required interface implementation
-    Task ITenantSeeder<string>.SeedAsync(DbContext context, string tenantId, CancellationToken ct)
-        => SeedAsync((AppDbContext)context, tenantId, ct);
-
-    Task ITenantSeeder.SeedAsync(DbContext context, object tenantId, CancellationToken ct)
-        => SeedAsync((AppDbContext)context, (string)tenantId, ct);
 }
 
 // Register in DI
