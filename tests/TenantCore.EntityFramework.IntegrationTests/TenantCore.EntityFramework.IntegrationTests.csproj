@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\TenantCore.EntityFramework\TenantCore.EntityFramework.csproj" />
     <ProjectReference Include="..\..\src\TenantCore.EntityFramework.PostgreSql\TenantCore.EntityFramework.PostgreSql.csproj" />
   </ItemGroup>

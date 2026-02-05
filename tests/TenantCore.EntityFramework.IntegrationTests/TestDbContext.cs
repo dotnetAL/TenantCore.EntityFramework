@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
@@ -13,6 +14,7 @@ public class TestDbContext : TenantDbContext<string>
     {
     }
 
+    [ActivatorUtilitiesConstructor]
     public TestDbContext(
         DbContextOptions<TestDbContext> options,
         ITenantContextAccessor<string> tenantContextAccessor,

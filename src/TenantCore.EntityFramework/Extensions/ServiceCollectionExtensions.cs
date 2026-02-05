@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TenantCore.EntityFramework.Abstractions;
@@ -8,7 +7,6 @@ using TenantCore.EntityFramework.Events;
 using TenantCore.EntityFramework.Lifecycle;
 using TenantCore.EntityFramework.Migrations;
 using TenantCore.EntityFramework.Resolvers;
-using TenantCore.EntityFramework.Strategies;
 
 namespace TenantCore.EntityFramework.Extensions;
 
@@ -61,45 +59,6 @@ public static class ServiceCollectionExtensions
 
         // Events
         services.TryAddSingleton<ITenantEventPublisher<TKey>, TenantEventPublisher<TKey>>();
-
-        return services;
-    }
-
-    /// <summary>
-    /// Adds a tenant-aware DbContext with automatic schema switching.
-    /// </summary>
-    /// <typeparam name="TContext">The DbContext type.</typeparam>
-    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
-    /// <param name="services">The service collection.</param>
-    /// <param name="optionsAction">Action to configure DbContext options.</param>
-    /// <returns>The service collection for chaining.</returns>
-    public static IServiceCollection AddTenantDbContext<TContext, TKey>(
-        this IServiceCollection services,
-        Action<IServiceProvider, DbContextOptionsBuilder> optionsAction)
-        where TContext : TenantDbContext<TKey>
-        where TKey : notnull
-    {
-        services.AddDbContextFactory<TContext>((sp, options) =>
-        {
-            optionsAction(sp, options);
-        });
-
-        services.AddScoped<TContext>(sp =>
-        {
-            var factory = sp.GetRequiredService<IDbContextFactory<TContext>>();
-            return factory.CreateDbContext();
-        });
-
-        // Register strategy
-        services.TryAddSingleton<ITenantStrategy<TKey>, SchemaPerTenantStrategy<TKey>>();
-        services.TryAddSingleton<SchemaPerTenantStrategy<TKey>>();
-
-        // Migration runner
-        services.TryAddSingleton<TenantMigrationRunner<TContext, TKey>>();
-        services.TryAddSingleton<MigrationTracker>();
-
-        // Tenant manager
-        services.TryAddScoped<ITenantManager<TKey>, TenantManager<TContext, TKey>>();
 
         return services;
     }

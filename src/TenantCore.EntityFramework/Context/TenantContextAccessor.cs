@@ -11,10 +11,7 @@ public class TenantContextAccessor<TKey> : ITenantContextAccessor<TKey> where TK
     private static readonly AsyncLocal<TenantContextHolder<TKey>> TenantContextCurrent = new();
 
     /// <inheritdoc />
-    public TenantContext<TKey>? TenantContext
-    {
-        get => TenantContextCurrent.Value?.Context;
-    }
+    public TenantContext<TKey>? TenantContext => TenantContextCurrent.Value?.Context;
 
     /// <inheritdoc />
     public void SetTenantContext(TenantContext<TKey>? context)

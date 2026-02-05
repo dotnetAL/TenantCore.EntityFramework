@@ -1,3 +1,4 @@
+using DotNet.Testcontainers.Builders;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -5,12 +6,19 @@ namespace TenantCore.EntityFramework.IntegrationTests;
 
 public class PostgreSqlFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder()
-        .WithImage("postgres:16-alpine")
-        .WithDatabase("tenantcore_test")
-        .WithUsername("test")
-        .WithPassword("test")
-        .Build();
+    private readonly PostgreSqlContainer _container;
+
+    public PostgreSqlFixture()
+    {
+        _container = new PostgreSqlBuilder()
+            .WithImage("postgres:16-alpine")
+            .WithDatabase("tenantcore_test")
+            .WithUsername("test")
+            .WithPassword("test")
+            .WithPortBinding(5432, true) // Bind to random available port
+            .WithWaitStrategy(Wait.ForUnixContainer().UntilPortIsAvailable(5432))
+            .Build();
+    }
 
     public string ConnectionString => _container.GetConnectionString();
 

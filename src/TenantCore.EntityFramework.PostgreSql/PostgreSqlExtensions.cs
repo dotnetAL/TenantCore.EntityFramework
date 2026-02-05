@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
+using TenantCore.EntityFramework.Lifecycle;
+using TenantCore.EntityFramework.Migrations;
+using TenantCore.EntityFramework.Strategies;
 
 namespace TenantCore.EntityFramework.PostgreSql;
 
@@ -58,14 +62,14 @@ public static class PostgreSqlExtensions
         services.AddDbContextFactory<TContext>((sp, options) =>
         {
             var tenantAccessor = sp.GetService<ITenantContextAccessor<TKey>>();
-            var tenantOptions = sp.GetRequiredService<TenantCoreOptions>();
 
             // Determine schema for this context
             var schema = tenantAccessor?.TenantContext?.SchemaName;
 
             options.UseNpgsql(connectionString, npgsql =>
             {
-                // Set default schema in connection if tenant is resolved
+                // Set migrations history table per tenant schema to ensure
+                // each tenant tracks its own migration state independently
                 if (!string.IsNullOrEmpty(schema))
                 {
                     npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema);
@@ -73,6 +77,10 @@ public static class PostgreSqlExtensions
 
                 npgsqlOptionsAction?.Invoke(npgsql);
             });
+
+            // Register the tenant-aware model cache key factory to ensure
+            // EF Core creates separate models for each tenant schema
+            options.ReplaceService<IModelCacheKeyFactory, TenantModelCacheKeyFactory<TKey>>();
         });
 
         services.AddScoped<TContext>(sp =>
@@ -80,6 +88,17 @@ public static class PostgreSqlExtensions
             var factory = sp.GetRequiredService<IDbContextFactory<TContext>>();
             return factory.CreateDbContext();
         });
+
+        // Register strategy
+        services.TryAddSingleton<ITenantStrategy<TKey>, SchemaPerTenantStrategy<TKey>>();
+        services.TryAddSingleton<SchemaPerTenantStrategy<TKey>>();
+
+        // Migration runner
+        services.TryAddSingleton<TenantMigrationRunner<TContext, TKey>>();
+        services.TryAddSingleton<MigrationTracker>();
+
+        // Tenant manager
+        services.TryAddScoped<ITenantManager<TKey>, TenantManager<TContext, TKey>>();
 
         return services;
     }
