@@ -31,6 +31,8 @@ builder.Services.AddTenantCore<string>(options =>
         migrations.ApplyOnStartup = true;
         migrations.ParallelMigrations = 2;
     });
+    // Exclude tenant management endpoints from tenant resolution
+    options.ExcludePaths("/api/tenants", "/health", "/swagger");
 });
 
 // Add PostgreSQL-specific services

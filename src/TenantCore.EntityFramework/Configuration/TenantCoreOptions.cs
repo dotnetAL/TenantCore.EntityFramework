@@ -50,6 +50,12 @@ public class TenantCoreOptions
     /// </summary>
     public bool AutoProvisionTenant { get; set; } = false;
 
+    /// <summary>
+    /// Gets or sets the list of path prefixes to exclude from tenant resolution.
+    /// Requests matching these prefixes will bypass the tenant middleware.
+    /// </summary>
+    public List<string> ExcludedPaths { get; set; } = new();
+
     internal List<Type> TenantResolverTypes { get; } = new();
     internal List<Type> TenantSeederTypes { get; } = new();
     internal Type? TenantStrategyType { get; set; }

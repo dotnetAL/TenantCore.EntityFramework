@@ -192,4 +192,27 @@ public class TenantCoreOptionsBuilder<TKey> where TKey : notnull
         configure(_options.ControlDb);
         return this;
     }
+
+    /// <summary>
+    /// Excludes a path prefix from tenant resolution.
+    /// Requests to paths starting with this prefix will bypass the tenant middleware.
+    /// </summary>
+    /// <param name="pathPrefix">The path prefix to exclude (e.g., "/api/tenants").</param>
+    /// <returns>The builder for chaining.</returns>
+    public TenantCoreOptionsBuilder<TKey> ExcludePath(string pathPrefix)
+    {
+        _options.ExcludedPaths.Add(pathPrefix);
+        return this;
+    }
+
+    /// <summary>
+    /// Excludes multiple path prefixes from tenant resolution.
+    /// </summary>
+    /// <param name="pathPrefixes">The path prefixes to exclude.</param>
+    /// <returns>The builder for chaining.</returns>
+    public TenantCoreOptionsBuilder<TKey> ExcludePaths(params string[] pathPrefixes)
+    {
+        _options.ExcludedPaths.AddRange(pathPrefixes);
+        return this;
+    }
 }

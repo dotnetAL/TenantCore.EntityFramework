@@ -29,8 +29,16 @@ public class TenantMiddleware<TKey> where TKey : notnull
     /// <param name="context">The HTTP context.</param>
     public async Task InvokeAsync(HttpContext context)
     {
-        var pipeline = context.RequestServices.GetRequiredService<ITenantResolverPipeline<TKey>>();
         var options = context.RequestServices.GetRequiredService<TenantCoreOptions>();
+
+        // Check if path is excluded from tenant resolution
+        if (IsPathExcluded(context.Request.Path, options.ExcludedPaths))
+        {
+            await _next(context);
+            return;
+        }
+
+        var pipeline = context.RequestServices.GetRequiredService<ITenantResolverPipeline<TKey>>();
 
         try
         {
@@ -45,6 +53,21 @@ public class TenantMiddleware<TKey> where TKey : notnull
             // Handle based on configuration
             await _next(context);
         }
+    }
+
+    private static bool IsPathExcluded(PathString path, List<string> excludedPaths)
+    {
+        if (excludedPaths.Count == 0)
+            return false;
+
+        var pathValue = path.Value ?? string.Empty;
+        foreach (var excludedPath in excludedPaths)
+        {
+            if (pathValue.StartsWith(excludedPath, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 }
 

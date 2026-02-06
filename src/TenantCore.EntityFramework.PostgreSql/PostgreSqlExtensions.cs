@@ -127,11 +127,11 @@ public static class PostgreSqlExtensions
             return factory.CreateDbContext();
         });
 
-        // Register strategy
-        services.TryAddSingleton<ITenantStrategy<TKey>, SchemaPerTenantStrategy<TKey>>();
+        // Register strategy (scoped to allow ITenantStore dependency when control database is enabled)
+        services.TryAddScoped<ITenantStrategy<TKey>, SchemaPerTenantStrategy<TKey>>();
 
-        // Migration runner
-        services.TryAddSingleton<TenantMigrationRunner<TContext, TKey>>();
+        // Migration runner (scoped to allow ITenantStrategy dependency)
+        services.TryAddScoped<TenantMigrationRunner<TContext, TKey>>();
         services.TryAddSingleton<MigrationTracker>();
 
         // Tenant manager

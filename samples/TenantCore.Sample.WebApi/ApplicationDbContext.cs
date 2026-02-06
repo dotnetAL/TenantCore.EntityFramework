@@ -10,10 +10,6 @@ public class ApplicationDbContext : TenantDbContext<string>
     public DbSet<Product> Products => Set<Product>();
     public DbSet<Category> Categories => Set<Category>();
 
-    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
-    {
-    }
-
     public ApplicationDbContext(
         DbContextOptions<ApplicationDbContext> options,
         ITenantContextAccessor<string> tenantContextAccessor,

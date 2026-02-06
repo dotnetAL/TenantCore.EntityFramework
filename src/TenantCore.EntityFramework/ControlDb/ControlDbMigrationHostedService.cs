@@ -12,35 +12,35 @@ namespace TenantCore.EntityFramework.ControlDb;
 public class ControlDbMigrationHostedService : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly TenantCoreOptions _options;
+    private readonly ControlDbOptions _controlDbOptions;
     private readonly ILogger<ControlDbMigrationHostedService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ControlDbMigrationHostedService"/> class.
     /// </summary>
     /// <param name="serviceProvider">The service provider.</param>
-    /// <param name="options">The tenant configuration options.</param>
+    /// <param name="controlDbOptions">The control database options.</param>
     /// <param name="logger">The logger instance.</param>
     public ControlDbMigrationHostedService(
         IServiceProvider serviceProvider,
-        TenantCoreOptions options,
+        ControlDbOptions controlDbOptions,
         ILogger<ControlDbMigrationHostedService> logger)
     {
         _serviceProvider = serviceProvider;
-        _options = options;
+        _controlDbOptions = controlDbOptions;
         _logger = logger;
     }
 
     /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (!_options.ControlDb.Enabled)
+        if (!_controlDbOptions.Enabled)
         {
             _logger.LogDebug("Control database is not enabled, skipping migrations");
             return;
         }
 
-        if (!_options.ControlDb.ApplyMigrationsOnStartup)
+        if (!_controlDbOptions.ApplyMigrationsOnStartup)
         {
             _logger.LogDebug("Control database migration on startup is disabled");
             return;
@@ -55,11 +55,19 @@ public class ControlDbMigrationHostedService : IHostedService
 
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
-            // Use EnsureCreated for the control database since it has a simple schema
-            // For production, consider using actual EF migrations
-            await context.Database.EnsureCreatedAsync(cancellationToken);
+            // EnsureCreatedAsync will:
+            // 1. Create the database if it doesn't exist (connects to postgres/master to do so)
+            // 2. Create all tables based on the model
+            var created = await context.Database.EnsureCreatedAsync(cancellationToken);
 
-            _logger.LogInformation("Control database migration completed successfully");
+            if (created)
+            {
+                _logger.LogInformation("Control database created and schema applied successfully");
+            }
+            else
+            {
+                _logger.LogInformation("Control database already exists, schema verified");
+            }
         }
         catch (Exception ex)
         {

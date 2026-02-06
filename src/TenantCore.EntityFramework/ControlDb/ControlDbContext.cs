@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using TenantCore.EntityFramework.ControlDb.Entities;
 
 namespace TenantCore.EntityFramework.ControlDb;
@@ -19,6 +20,7 @@ public class ControlDbContext : DbContext
     /// Initializes a new instance of the <see cref="ControlDbContext"/> class.
     /// </summary>
     /// <param name="options">The DbContext options.</param>
+    [ActivatorUtilitiesConstructor]
     public ControlDbContext(DbContextOptions<ControlDbContext> options)
         : this(options, "tenant_control")
     {
