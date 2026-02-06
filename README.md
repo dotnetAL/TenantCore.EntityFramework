@@ -9,7 +9,8 @@ A robust, extensible multi-tenancy solution for Entity Framework Core with schem
 ## Features
 
 - **Schema-Per-Tenant Isolation**: Complete data separation at the database level
-- **Pluggable Tenant Resolution**: Multiple built-in resolvers (header, claims, subdomain, route, query string)
+- **Pluggable Tenant Resolution**: Multiple built-in resolvers (header, claims, subdomain, path, route, query string, API key)
+- **Control Database**: Optional centralized tenant metadata storage with status tracking, encrypted credentials, and API key authentication
 - **Automatic Migration Management**: Apply migrations across all tenant schemas
 - **Full Tenant Lifecycle**: Provision, archive, restore, and delete tenants
 - **Event System**: Subscribe to tenant lifecycle events
@@ -89,7 +90,9 @@ TenantCore includes several built-in tenant resolvers. Multiple resolvers can be
 | Resolver | Default Priority | Registration Helper |
 |----------|-----------------|---------------------|
 | Claims | 200 | `AddClaimsTenantResolver<TKey>()` |
+| API Key | 175 | `AddApiKeyTenantResolver<TKey>()` |
 | Route Value | 150 | Manual `AddScoped` |
+| Path | 125 | `AddPathTenantResolver<TKey>()` |
 | Header | 100 | `AddHeaderTenantResolver<TKey>()` |
 | Subdomain | 50 | `AddSubdomainTenantResolver<TKey>()` |
 | Query String | 25 | Manual `AddScoped` |
@@ -131,6 +134,26 @@ builder.Services.AddScoped<ITenantResolver<string>>(sp =>
         sp.GetRequiredService<IHttpContextAccessor>(),
         "tenantId"));
 // /api/{tenantId}/products -> extracts from route
+```
+
+### Path-Based
+
+```csharp
+// By segment index (0-based)
+builder.Services.AddPathTenantResolver<string>(segmentIndex: 0);
+// /{tenant}/api/products -> tenant
+
+// By path prefix
+builder.Services.AddPathTenantResolverWithPrefix<string>("/api");
+// /api/{tenant}/products -> tenant
+```
+
+### API Key-Based (Requires Control Database)
+
+```csharp
+builder.Services.AddApiKeyTenantResolver<Guid>("X-Api-Key");
+// Looks up tenant by SHA-256 hash of the API key in the control database
+// Only returns Active tenants
 ```
 
 ### Custom Resolver
@@ -292,6 +315,79 @@ builder.Services.AddTenantEventSubscriber<string, TenantEventHandler>();
 builder.Services.AddTenantHealthChecks<AppDbContext, string>("tenants");
 ```
 
+## Control Database (Optional)
+
+The Control Database feature provides centralized tenant metadata storage with support for:
+- Tenant status tracking (Pending, Active, Suspended, Disabled, FlaggedForDelete)
+- Encrypted database credentials
+- API key authentication (SHA-256 hashed)
+- Caching for improved performance
+
+### Setup
+
+```csharp
+// Add control database with PostgreSQL
+builder.Services.AddTenantControlDatabase(
+    dbOptions => dbOptions.UseNpgsql(controlDbConnectionString),
+    options =>
+    {
+        options.Schema = "tenant_control";
+        options.EnableCaching = true;
+        options.CacheDuration = TimeSpan.FromMinutes(5);
+        options.ApplyMigrationsOnStartup = true;
+        options.MigratableStatuses = [TenantStatus.Pending, TenantStatus.Active];
+    });
+```
+
+### Provisioning with Control Database
+
+When the control database is configured, use the extended provisioning method:
+
+```csharp
+var tenantManager = app.Services.GetRequiredService<TenantManager<AppDbContext, Guid>>();
+
+var request = new CreateTenantRequest(
+    TenantSlug: "acme-corp",
+    TenantSchema: "tenant_acme",
+    TenantApiKey: "sk_live_abc123..."  // Will be hashed with SHA-256
+);
+
+var tenant = await tenantManager.ProvisionTenantAsync(Guid.NewGuid(), request);
+// Creates control DB record (Pending) -> provisions schema -> sets status to Active
+```
+
+### Custom Tenant Store (BYO)
+
+Implement your own tenant storage by implementing `ITenantStore`:
+
+```csharp
+public class MyTenantStore : ITenantStore
+{
+    // Implement all ITenantStore methods
+}
+
+// Register
+builder.Services.AddTenantStore<MyTenantStore>(options =>
+{
+    options.EnableCaching = true;
+});
+```
+
+### Tenant Record Fields
+
+| Field | Description |
+|-------|-------------|
+| TenantId | Unique identifier (Guid) |
+| TenantSlug | URL-friendly identifier |
+| Status | Tenant status enum |
+| TenantSchema | Database schema name |
+| TenantDatabase | Optional separate database |
+| TenantDbServer | Optional separate server |
+| TenantDbUser | Optional database user |
+| TenantDbPasswordEncrypted | Encrypted password (Data Protection API) |
+| TenantApiKeyHash | SHA-256 hash of API key |
+| CreatedAt / UpdatedAt | Timestamps |
+
 ## Configuration Options
 
 ```csharp
@@ -374,12 +470,19 @@ A complete sample Web API is included in the `samples/TenantCore.Sample.WebApi` 
 - Tenant-scoped CRUD operations
 - Health check configuration
 - Swagger/OpenAPI integration
+- Optional Control Database integration
 
 Run the sample:
 
 ```bash
 cd samples/TenantCore.Sample.WebApi
 dotnet run
+```
+
+To enable the Control Database feature in the sample:
+
+```bash
+dotnet run -- --TenantCore:UseControlDatabase=true
 ```
 
 ## Requirements

@@ -10,6 +10,13 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? "Host=localhost;Database=tenantcore_sample;Username=postgres;Password=postgres";
 
+// Optional: Control database connection string (can be same or different database)
+var controlDbConnectionString = builder.Configuration.GetConnectionString("ControlDatabase")
+    ?? connectionString;
+
+// Check if control database feature is enabled
+var useControlDb = builder.Configuration.GetValue<bool>("TenantCore:UseControlDatabase");
+
 // Add TenantCore services
 builder.Services.AddTenantCore<string>(options =>
 {
@@ -31,6 +38,23 @@ builder.Services.AddTenantCorePostgreSql();
 
 // Add HTTP tenant resolver (from X-Tenant-Id header)
 builder.Services.AddHeaderTenantResolver<string>();
+
+// Optional: Add control database for centralized tenant metadata
+// Enable by setting TenantCore:UseControlDatabase=true in configuration
+if (useControlDb)
+{
+    builder.Services.AddTenantControlDatabase(
+        dbOptions => dbOptions.UseNpgsql(controlDbConnectionString),
+        options =>
+        {
+            options.Schema = "tenant_control";
+            options.EnableCaching = true;
+            options.ApplyMigrationsOnStartup = true;
+        });
+
+    // Add API key resolver (requires control database)
+    builder.Services.AddApiKeyTenantResolver<string>("X-Api-Key");
+}
 
 // Add tenant-aware DbContext
 builder.Services.AddTenantDbContextPostgreSql<ApplicationDbContext, string>(connectionString);
