@@ -353,4 +353,143 @@ public class PathTenantResolverTests
         // Assert
         resolver.Priority.Should().Be(200);
     }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithCustomParserAndPathPrefix_ShouldUseParser()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = "/api/PREFIX_tenant1/products";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<string>(
+            accessor.Object,
+            pathPrefix: "/api",
+            parser: value => value.Replace("PREFIX_", ""));
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().Be("tenant1");
+    }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithNegativeSegmentIndex_ShouldReturnNull()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = "/tenant1/api/products";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<string>(accessor.Object, segmentIndex: -1);
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithOnlySlashes_ShouldReturnNull()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = "///";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<string>(accessor.Object);
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithParserThrowingException_ShouldReturnDefault()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = "/api/tenant1/products";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<string>(
+            accessor.Object,
+            segmentIndex: 1,
+            parser: _ => throw new InvalidOperationException("Parser error"));
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithPrefixMatchingPartially_ShouldReturnNull()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = "/apiv2/tenant1/products";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<string>(accessor.Object, pathPrefix: "/api");
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithRootPath_ShouldReturnNull()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = "/";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<string>(accessor.Object);
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveTenantAsync_WithLongTenantId_ShouldReturnTenantId()
+    {
+        // Arrange
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Path = $"/api/{Guid.NewGuid()}-{Guid.NewGuid()}/products";
+
+        var accessor = new Mock<IHttpContextAccessor>();
+        accessor.Setup(x => x.HttpContext).Returns(httpContext);
+
+        var resolver = new PathTenantResolver<int>(accessor.Object, segmentIndex: 1);
+
+        // Act
+        var tenantId = await resolver.ResolveTenantAsync();
+
+        // Assert
+        tenantId.Should().Be(0); // Invalid int returns default
+    }
 }
