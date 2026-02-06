@@ -15,8 +15,12 @@ public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Applicatio
     {
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
 
-        // Use a placeholder connection string for design-time operations
-        optionsBuilder.UseNpgsql("Host=localhost;Database=tenantcore_sample;Username=postgres;Password=postgres");
+        // Get connection string from environment variable for design-time operations
+        var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
+            ?? throw new InvalidOperationException(
+                "Set ConnectionStrings__DefaultConnection environment variable for EF Core migrations");
+
+        optionsBuilder.UseNpgsql(connectionString);
 
         // Create a mock tenant context accessor for design time
         var tenantAccessor = new DesignTimeTenantContextAccessor();

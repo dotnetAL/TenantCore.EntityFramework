@@ -6,9 +6,9 @@ using TenantCore.Sample.WebApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Get connection string from configuration
+// Get connection string from configuration (required - no default)
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? "Host=localhost;Database=tenantcore_sample;Username=postgres;Password=postgres";
+    ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required. Set via environment variable or appsettings.json");
 
 // Optional: Control database connection string (can be same or different database)
 var controlDbConnectionString = builder.Configuration.GetConnectionString("ControlDatabase")
