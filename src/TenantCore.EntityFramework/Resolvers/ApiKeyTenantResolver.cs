@@ -10,7 +10,7 @@ namespace TenantCore.EntityFramework.Resolvers;
 /// </summary>
 /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
 /// <remarks>
-/// This resolver verifies the provided API key against salted PBKDF2 hashes stored in the
+/// This resolver verifies the provided API key against salted PBKDF2-SHA256 hashes stored in the
 /// <see cref="ITenantStore"/>. Only tenants with <see cref="TenantStatus.Active"/> status
 /// are considered. If the tenant store is not configured, the API key is invalid, or no
 /// matching tenant is found, this resolver returns null/default.
@@ -24,7 +24,7 @@ public class ApiKeyTenantResolver<TKey> : ITenantResolver<TKey> where TKey : not
 
     /// <summary>
     /// Gets the priority of this resolver.
-    /// Default is 175 (between Claims at 150 and Path at 125).
+    /// Default is 175 (between Claims at 200 and Route Value at 150).
     /// </summary>
     public int Priority { get; init; } = 175;
 

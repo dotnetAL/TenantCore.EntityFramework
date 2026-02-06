@@ -152,7 +152,7 @@ builder.Services.AddPathTenantResolverWithPrefix<string>("/api");
 
 ```csharp
 builder.Services.AddApiKeyTenantResolver<Guid>("X-Api-Key");
-// Looks up tenant by SHA-256 hash of the API key in the control database
+// Verifies tenant API key using salted PBKDF2-SHA256 hashing in the control database
 // Only returns Active tenants
 ```
 
@@ -320,7 +320,7 @@ builder.Services.AddTenantHealthChecks<AppDbContext, string>("tenants");
 The Control Database feature provides centralized tenant metadata storage with support for:
 - Tenant status tracking (Pending, Active, Suspended, Disabled, FlaggedForDelete)
 - Encrypted database credentials
-- API key authentication (SHA-256 hashed)
+- API key authentication (salted PBKDF2-SHA256 hashed)
 - Caching for improved performance
 
 ### Setup
@@ -349,7 +349,7 @@ var tenantManager = app.Services.GetRequiredService<TenantManager<AppDbContext, 
 var request = new CreateTenantRequest(
     TenantSlug: "acme-corp",
     TenantSchema: "tenant_acme",
-    TenantApiKey: "sk_live_abc123..."  // Will be hashed with SHA-256
+    TenantApiKey: "sk_live_abc123..."  // Will be hashed with salted PBKDF2-SHA256
 );
 
 var tenant = await tenantManager.ProvisionTenantAsync(Guid.NewGuid(), request);
@@ -385,7 +385,7 @@ builder.Services.AddTenantStore<MyTenantStore>(options =>
 | TenantDbServer | Optional separate server |
 | TenantDbUser | Optional database user |
 | TenantDbPasswordEncrypted | Encrypted password (Data Protection API) |
-| TenantApiKeyHash | SHA-256 hash of API key |
+| TenantApiKeyHash | Salted PBKDF2-SHA256 hash of API key |
 | CreatedAt / UpdatedAt | Timestamps |
 
 ## Configuration Options
@@ -459,8 +459,8 @@ protected override void ConfigureSharedEntities(ModelBuilder modelBuilder)
 | Database   | Package                              | Status |
 |------------|--------------------------------------|--------|
 | PostgreSQL | TenantCore.EntityFramework.PostgreSql | ✅ Supported |
-| SQL Server | Coming in v2.0                       | 🔜 Planned |
-| MySQL      | Coming in v2.0                       | 🔜 Planned |
+| SQL Server | TenantCore.EntityFramework.SqlServer | 🔜 Planned |
+| MySQL      | TenantCore.EntityFramework.MySql     | 🔜 Planned |
 
 ## Sample Project
 
