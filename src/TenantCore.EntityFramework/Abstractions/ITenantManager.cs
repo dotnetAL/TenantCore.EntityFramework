@@ -35,6 +35,7 @@ public interface ITenantManager<TKey> where TKey : notnull
     /// <param name="tenantId">The tenant identifier.</param>
     /// <param name="hardDelete">If true, permanently deletes all tenant data; if false, performs a soft delete.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="TenantNotFoundException">Thrown if the tenant does not exist.</exception>
     Task DeleteTenantAsync(TKey tenantId, bool hardDelete = false, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -42,6 +43,7 @@ public interface ITenantManager<TKey> where TKey : notnull
     /// </summary>
     /// <param name="tenantId">The tenant identifier.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="TenantNotFoundException">Thrown if the tenant does not exist.</exception>
     Task ArchiveTenantAsync(TKey tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -49,6 +51,7 @@ public interface ITenantManager<TKey> where TKey : notnull
     /// </summary>
     /// <param name="tenantId">The tenant identifier.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="TenantNotFoundException">Thrown if the archived tenant does not exist.</exception>
     Task RestoreTenantAsync(TKey tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>

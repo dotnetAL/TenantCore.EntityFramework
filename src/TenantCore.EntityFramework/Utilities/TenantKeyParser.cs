@@ -12,6 +12,8 @@ internal static class TenantKeyParser<TKey> where TKey : notnull
     /// <param name="value">The string value to parse.</param>
     /// <returns>The parsed tenant key.</returns>
     /// <exception cref="NotSupportedException">Thrown when the tenant key type is not supported.</exception>
+    /// <exception cref="FormatException">Thrown when the value cannot be parsed to the target type.</exception>
+    /// <exception cref="OverflowException">Thrown when the value is outside the range of the target type.</exception>
     public static TKey Parse(string value)
     {
         var type = typeof(TKey);
