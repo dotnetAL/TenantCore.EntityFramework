@@ -7,9 +7,11 @@ namespace TenantCore.EntityFramework.ControlDb;
 /// Decorator that adds caching to an <see cref="ITenantStore"/> implementation.
 /// </summary>
 /// <remarks>
-/// This decorator caches tenant records by ID, slug, and API key hash.
+/// This decorator caches tenant records by ID and slug.
 /// For security, passwords are never cached - <see cref="GetTenantPasswordAsync"/> always
 /// delegates directly to the inner store.
+/// API key verification is not cached since it involves salted hashes and must verify
+/// against all stored hashes.
 /// Cache entries are invalidated on create, update, and delete operations.
 /// </remarks>
 public class CachedTenantStore : ITenantStore
@@ -22,7 +24,6 @@ public class CachedTenantStore : ITenantStore
     private const string TenantsKeyPrefix = CacheKeyPrefix + "Tenants:";
     private const string TenantKeyPrefix = CacheKeyPrefix + "Tenant:";
     private const string TenantBySlugKeyPrefix = CacheKeyPrefix + "TenantBySlug:";
-    private const string TenantByApiKeyHashKeyPrefix = CacheKeyPrefix + "TenantByApiKeyHash:";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CachedTenantStore"/> class.
@@ -97,23 +98,13 @@ public class CachedTenantStore : ITenantStore
     }
 
     /// <inheritdoc />
-    public async Task<TenantRecord?> GetTenantByApiKeyHashAsync(string apiKeyHash, CancellationToken cancellationToken = default)
+    public Task<TenantRecord?> GetTenantByApiKeyAsync(string apiKey, CancellationToken cancellationToken = default)
     {
-        var cacheKey = $"{TenantByApiKeyHashKeyPrefix}{apiKeyHash}";
-
-        if (_cache.TryGetValue(cacheKey, out TenantRecord? cached))
-        {
-            return cached;
-        }
-
-        var result = await _inner.GetTenantByApiKeyHashAsync(apiKeyHash, cancellationToken);
-
-        if (result != null)
-        {
-            _cache.Set(cacheKey, result, _options.CacheDuration);
-        }
-
-        return result;
+        // API key verification is not cached for security reasons:
+        // 1. Salted hashes mean we can't use the API key as a cache key
+        // 2. Caching would require storing the plaintext API key
+        // 3. Each verification must check against all stored hashes
+        return _inner.GetTenantByApiKeyAsync(apiKey, cancellationToken);
     }
 
     /// <inheritdoc />

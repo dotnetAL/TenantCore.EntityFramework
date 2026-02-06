@@ -74,9 +74,11 @@ public class ControlDbContext : DbContext
             entity.Property(e => e.TenantDbPasswordEncrypted)
                 .HasMaxLength(1024);
 
+            // Format: {iterations}.{base64(salt)}.{base64(hash)}
+            // Example: 100000.{22 chars}.{44 chars} = ~75 characters
+            // Allow extra room for future algorithm changes
             entity.Property(e => e.TenantApiKeyHash)
-                .HasMaxLength(64)
-                .IsFixedLength();
+                .HasMaxLength(128);
 
             entity.Property(e => e.CreatedAt)
                 .IsRequired();

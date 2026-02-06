@@ -32,12 +32,12 @@ public interface ITenantStore
     Task<TenantRecord?> GetTenantBySlugAsync(string slug, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a tenant by its API key hash.
+    /// Gets a tenant by verifying the provided API key against stored hashes.
     /// </summary>
-    /// <param name="apiKeyHash">The SHA-256 hash of the API key (lowercase hex).</param>
+    /// <param name="apiKey">The plaintext API key to verify.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tenant record, or null if not found.</returns>
-    Task<TenantRecord?> GetTenantByApiKeyHashAsync(string apiKeyHash, CancellationToken cancellationToken = default);
+    /// <returns>The tenant record if the API key is valid, or null if not found or invalid.</returns>
+    Task<TenantRecord?> GetTenantByApiKeyAsync(string apiKey, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a new tenant.

@@ -241,38 +241,21 @@ public class CachedTenantStoreTests
     }
 
     [Fact]
-    public async Task GetTenantByApiKeyHashAsync_FirstCall_ShouldCallInnerStore()
+    public async Task GetTenantByApiKeyAsync_ShouldNeverCache()
     {
         // Arrange
         var tenant = CreateTenantRecord(Guid.NewGuid(), "api-tenant");
-        var apiKeyHash = "abc123hash";
-        _innerStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
+        var apiKey = "test-api-key";
+        _innerStoreMock.Setup(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()))
             .ReturnsAsync(tenant);
 
         // Act
-        var result = await _cachedStore.GetTenantByApiKeyHashAsync(apiKeyHash);
+        await _cachedStore.GetTenantByApiKeyAsync(apiKey);
+        var result = await _cachedStore.GetTenantByApiKeyAsync(apiKey);
 
-        // Assert
+        // Assert - API key verification should never be cached for security reasons
         result.Should().Be(tenant);
-        _innerStoreMock.Verify(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task GetTenantByApiKeyHashAsync_SecondCall_ShouldReturnCachedResult()
-    {
-        // Arrange
-        var tenant = CreateTenantRecord(Guid.NewGuid(), "api-tenant");
-        var apiKeyHash = "abc123hash";
-        _innerStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tenant);
-
-        // Act
-        await _cachedStore.GetTenantByApiKeyHashAsync(apiKeyHash);
-        var result = await _cachedStore.GetTenantByApiKeyHashAsync(apiKeyHash);
-
-        // Assert
-        result.Should().Be(tenant);
-        _innerStoreMock.Verify(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()), Times.Once);
+        _innerStoreMock.Verify(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     private static TenantRecord CreateTenantRecord(

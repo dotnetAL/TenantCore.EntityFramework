@@ -6,14 +6,14 @@ using TenantCore.EntityFramework.Utilities;
 namespace TenantCore.EntityFramework.Resolvers;
 
 /// <summary>
-/// Resolves tenant from an API key header by looking up the hashed key in the tenant store.
+/// Resolves tenant from an API key header by verifying the key against stored hashes in the tenant store.
 /// </summary>
 /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
 /// <remarks>
-/// This resolver computes a SHA-256 hash of the provided API key and looks it up in the
+/// This resolver verifies the provided API key against salted PBKDF2 hashes stored in the
 /// <see cref="ITenantStore"/>. Only tenants with <see cref="TenantStatus.Active"/> status
-/// are returned. If the tenant store is not configured, the API key is invalid, or the
-/// tenant is not active, this resolver returns null/default.
+/// are considered. If the tenant store is not configured, the API key is invalid, or no
+/// matching tenant is found, this resolver returns null/default.
 /// </remarks>
 public class ApiKeyTenantResolver<TKey> : ITenantResolver<TKey> where TKey : notnull
 {
@@ -84,11 +84,8 @@ public class ApiKeyTenantResolver<TKey> : ITenantResolver<TKey> where TKey : not
 
         try
         {
-            // Compute SHA-256 hash of the API key
-            var apiKeyHash = ApiKeyHasher.ComputeHash(apiKey);
-
-            // Look up tenant by API key hash
-            var tenant = await _tenantStore.GetTenantByApiKeyHashAsync(apiKeyHash, cancellationToken);
+            // Verify API key against stored hashes and get the matching tenant
+            var tenant = await _tenantStore.GetTenantByApiKeyAsync(apiKey, cancellationToken);
 
             // Only return tenant if found and status is Active
             if (tenant == null || tenant.Status != TenantStatus.Active)

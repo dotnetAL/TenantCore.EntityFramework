@@ -15,12 +15,11 @@ public class ApiKeyTenantResolverTests
         // Arrange
         var tenantId = Guid.NewGuid();
         var apiKey = "valid-api-key-123";
-        var apiKeyHash = ApiKeyHasher.ComputeHash(apiKey);
 
-        var tenant = CreateTenantRecord(tenantId, "test-tenant", apiKeyHash);
+        var tenant = CreateTenantRecord(tenantId, "test-tenant");
 
         var tenantStoreMock = new Mock<ITenantStore>();
-        tenantStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
+        tenantStoreMock.Setup(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()))
             .ReturnsAsync(tenant);
 
         var httpContext = new DefaultHttpContext();
@@ -44,12 +43,11 @@ public class ApiKeyTenantResolverTests
         // Arrange
         var tenantId = Guid.NewGuid();
         var apiKey = "valid-api-key-123";
-        var apiKeyHash = ApiKeyHasher.ComputeHash(apiKey);
 
-        var tenant = CreateTenantRecord(tenantId, "test-tenant", apiKeyHash, TenantStatus.Suspended);
+        var tenant = CreateTenantRecord(tenantId, "test-tenant", TenantStatus.Suspended);
 
         var tenantStoreMock = new Mock<ITenantStore>();
-        tenantStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
+        tenantStoreMock.Setup(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()))
             .ReturnsAsync(tenant);
 
         var httpContext = new DefaultHttpContext();
@@ -85,7 +83,7 @@ public class ApiKeyTenantResolverTests
 
         // Assert
         result.Should().Be(Guid.Empty);
-        tenantStoreMock.Verify(s => s.GetTenantByApiKeyHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        tenantStoreMock.Verify(s => s.GetTenantByApiKeyAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -114,10 +112,9 @@ public class ApiKeyTenantResolverTests
     {
         // Arrange
         var apiKey = "unknown-api-key";
-        var apiKeyHash = ApiKeyHasher.ComputeHash(apiKey);
 
         var tenantStoreMock = new Mock<ITenantStore>();
-        tenantStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
+        tenantStoreMock.Setup(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()))
             .ReturnsAsync((TenantRecord?)null);
 
         var httpContext = new DefaultHttpContext();
@@ -178,12 +175,11 @@ public class ApiKeyTenantResolverTests
         // Arrange
         var tenantId = Guid.NewGuid();
         var apiKey = "custom-api-key";
-        var apiKeyHash = ApiKeyHasher.ComputeHash(apiKey);
 
-        var tenant = CreateTenantRecord(tenantId, "test-tenant", apiKeyHash);
+        var tenant = CreateTenantRecord(tenantId, "test-tenant");
 
         var tenantStoreMock = new Mock<ITenantStore>();
-        tenantStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
+        tenantStoreMock.Setup(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()))
             .ReturnsAsync(tenant);
 
         var httpContext = new DefaultHttpContext();
@@ -207,12 +203,11 @@ public class ApiKeyTenantResolverTests
         // Arrange
         var tenantId = Guid.NewGuid();
         var apiKey = "valid-api-key";
-        var apiKeyHash = ApiKeyHasher.ComputeHash(apiKey);
 
-        var tenant = CreateTenantRecord(tenantId, "test-tenant", apiKeyHash);
+        var tenant = CreateTenantRecord(tenantId, "test-tenant");
 
         var tenantStoreMock = new Mock<ITenantStore>();
-        tenantStoreMock.Setup(s => s.GetTenantByApiKeyHashAsync(apiKeyHash, It.IsAny<CancellationToken>()))
+        tenantStoreMock.Setup(s => s.GetTenantByApiKeyAsync(apiKey, It.IsAny<CancellationToken>()))
             .ReturnsAsync(tenant);
 
         var httpContext = new DefaultHttpContext();
@@ -255,7 +250,6 @@ public class ApiKeyTenantResolverTests
     private static TenantRecord CreateTenantRecord(
         Guid tenantId,
         string slug,
-        string? apiKeyHash = null,
         TenantStatus status = TenantStatus.Active)
     {
         var now = DateTime.UtcNow;

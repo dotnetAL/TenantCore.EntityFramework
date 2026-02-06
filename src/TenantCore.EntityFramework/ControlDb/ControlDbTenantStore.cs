@@ -70,15 +70,34 @@ public class ControlDbTenantStore : ITenantStore
     }
 
     /// <inheritdoc />
-    public async Task<TenantRecord?> GetTenantByApiKeyHashAsync(string apiKeyHash, CancellationToken cancellationToken = default)
+    public async Task<TenantRecord?> GetTenantByApiKeyAsync(string apiKey, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return null;
+        }
+
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
-        var entity = await context.Tenants
+        // Get all tenants with API keys (only active ones for performance)
+        // Note: This requires iterating through tenants since we can't query by hash
+        // when using salted hashes. For large deployments, consider caching or
+        // using a separate API key lookup table with the key prefix.
+        var tenantsWithApiKeys = await context.Tenants
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.TenantApiKeyHash == apiKeyHash, cancellationToken);
+            .Where(t => t.TenantApiKeyHash != null && t.Status == TenantStatus.Active)
+            .ToListAsync(cancellationToken);
 
-        return entity?.ToRecord();
+        // Verify the API key against each stored hash
+        foreach (var tenant in tenantsWithApiKeys)
+        {
+            if (tenant.TenantApiKeyHash != null && ApiKeyHasher.VerifyHash(apiKey, tenant.TenantApiKeyHash))
+            {
+                return tenant.ToRecord();
+            }
+        }
+
+        return null;
     }
 
     /// <inheritdoc />
