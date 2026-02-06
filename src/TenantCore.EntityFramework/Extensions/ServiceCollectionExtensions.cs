@@ -35,8 +35,20 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton(options);
 
-        // Core services
-        services.TryAddSingleton<ITenantContextAccessor<TKey>, TenantContextAccessor<TKey>>();
+        // Core services - use factory to auto-detect HTTP context availability
+        services.TryAddSingleton<ITenantContextAccessor<TKey>>(sp =>
+        {
+            // If IHttpContextAccessor is available, use HTTP-aware accessor
+            // This handles ASP.NET Core's execution context behavior where AsyncLocal
+            // doesn't reliably persist across middleware boundaries
+            var httpContextAccessor = sp.GetService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
+            if (httpContextAccessor != null)
+            {
+                return new HttpContextTenantContextAccessor<TKey>(httpContextAccessor);
+            }
+            // Fallback to AsyncLocal-based accessor for non-HTTP scenarios
+            return new TenantContextAccessor<TKey>();
+        });
         services.TryAddSingleton<ITenantScopeFactory<TKey>, TenantScopeFactory<TKey>>();
 
         // Resolver pipeline
@@ -133,8 +145,6 @@ public static class ServiceCollectionExtensions
         where TKey : notnull
     {
         services.AddHttpContextAccessor();
-        // Replace default TenantContextAccessor with HttpContext-aware version for web scenarios
-        services.UseHttpContextTenantContextAccessor<TKey>();
         services.AddScoped<ITenantResolver<TKey>>(sp =>
             new HeaderTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), headerName));
         return services;
@@ -153,8 +163,6 @@ public static class ServiceCollectionExtensions
         where TKey : notnull
     {
         services.AddHttpContextAccessor();
-        // Replace default TenantContextAccessor with HttpContext-aware version for web scenarios
-        services.UseHttpContextTenantContextAccessor<TKey>();
         services.AddScoped<ITenantResolver<TKey>>(sp =>
             new ClaimsTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), claimType));
         return services;
@@ -173,8 +181,6 @@ public static class ServiceCollectionExtensions
         where TKey : notnull
     {
         services.AddHttpContextAccessor();
-        // Replace default TenantContextAccessor with HttpContext-aware version for web scenarios
-        services.UseHttpContextTenantContextAccessor<TKey>();
         services.AddScoped<ITenantResolver<TKey>>(sp =>
             new SubdomainTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), baseDomain));
         return services;
@@ -201,8 +207,6 @@ public static class ServiceCollectionExtensions
         where TKey : notnull
     {
         services.AddHttpContextAccessor();
-        // Replace default TenantContextAccessor with HttpContext-aware version for web scenarios
-        services.UseHttpContextTenantContextAccessor<TKey>();
         services.AddScoped<ITenantResolver<TKey>>(sp =>
             new PathTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), segmentIndex));
         return services;
@@ -225,8 +229,6 @@ public static class ServiceCollectionExtensions
         where TKey : notnull
     {
         services.AddHttpContextAccessor();
-        // Replace default TenantContextAccessor with HttpContext-aware version for web scenarios
-        services.UseHttpContextTenantContextAccessor<TKey>();
         services.AddScoped<ITenantResolver<TKey>>(sp =>
             new PathTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), pathPrefix));
         return services;
@@ -310,8 +312,6 @@ public static class ServiceCollectionExtensions
         where TKey : notnull
     {
         services.AddHttpContextAccessor();
-        // Replace default TenantContextAccessor with HttpContext-aware version for web scenarios
-        services.UseHttpContextTenantContextAccessor<TKey>();
         services.AddScoped<ITenantResolver<TKey>>(sp =>
         {
             var httpContextAccessor = sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
@@ -372,37 +372,6 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddControlDbMigrationHostedService(this IServiceCollection services)
     {
         services.AddHostedService<ControlDbMigrationHostedService>();
-        return services;
-    }
-
-    /// <summary>
-    /// Replaces the default <see cref="TenantContextAccessor{TKey}"/> with <see cref="HttpContextTenantContextAccessor{TKey}"/>
-    /// for ASP.NET Core web scenarios. This is necessary because AsyncLocal does not reliably preserve values
-    /// across middleware boundaries in ASP.NET Core.
-    /// </summary>
-    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
-    /// <param name="services">The service collection.</param>
-    /// <returns>The service collection for chaining.</returns>
-    /// <remarks>
-    /// This method is automatically called by HTTP-based tenant resolvers (AddHeaderTenantResolver, etc.).
-    /// </remarks>
-    public static IServiceCollection UseHttpContextTenantContextAccessor<TKey>(this IServiceCollection services)
-        where TKey : notnull
-    {
-        // Remove any existing registration (the default TenantContextAccessor)
-        var existing = services.FirstOrDefault(d => d.ServiceType == typeof(ITenantContextAccessor<TKey>));
-        if (existing != null)
-        {
-            services.Remove(existing);
-        }
-
-        // Add HttpContext-aware accessor
-        services.AddSingleton<ITenantContextAccessor<TKey>>(sp =>
-        {
-            var httpContextAccessor = sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
-            return new HttpContextTenantContextAccessor<TKey>(httpContextAccessor);
-        });
-
         return services;
     }
 }
