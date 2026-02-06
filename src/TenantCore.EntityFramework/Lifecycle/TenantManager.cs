@@ -64,25 +64,101 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
     {
         _logger.LogInformation("Provisioning tenant {TenantId}", tenantId);
 
-        using var scope = _serviceProvider.CreateScope();
-        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
+        // If control database is enabled, create a record there first
+        Guid? controlDbTenantId = null;
+        if (_tenantStore != null)
+        {
+            controlDbTenantId = ConvertToGuid(tenantId);
+            var schemaName = _options.SchemaPerTenant.GenerateSchemaName(tenantId);
+            var request = new CreateTenantRequest(tenantId.ToString()!, schemaName);
 
-        // Use a temporary context for schema creation
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            try
+            {
+                await _tenantStore.CreateTenantAsync(controlDbTenantId.Value, request, cancellationToken);
+            }
+            catch (TenantAlreadyExistsException)
+            {
+                throw;
+            }
+            catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (IsDuplicateKeyException(ex))
+            {
+                throw new TenantAlreadyExistsException(tenantId, ex);
+            }
+        }
 
-        // Create the schema
-        await _strategy.ProvisionTenantAsync(context, tenantId, cancellationToken);
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
 
-        // Apply migrations
-        await _migrationRunner.MigrateTenantAsync(tenantId, cancellationToken);
+            // Use a temporary context for schema creation
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
-        // Run seeders
-        await RunSeedersAsync(tenantId, cancellationToken);
+            // Create the schema
+            await _strategy.ProvisionTenantAsync(context, tenantId, cancellationToken);
 
-        // Publish event
-        await _eventPublisher.PublishTenantCreatedAsync(tenantId, cancellationToken);
+            // Apply migrations
+            await _migrationRunner.MigrateTenantAsync(tenantId, cancellationToken);
 
-        _logger.LogInformation("Successfully provisioned tenant {TenantId}", tenantId);
+            // Run seeders
+            await RunSeedersAsync(tenantId, cancellationToken);
+
+            // Update status to Active in control database
+            if (_tenantStore != null && controlDbTenantId.HasValue)
+            {
+                await _tenantStore.UpdateStatusAsync(controlDbTenantId.Value, TenantStatus.Active, cancellationToken);
+            }
+
+            // Publish event
+            await _eventPublisher.PublishTenantCreatedAsync(tenantId, cancellationToken);
+
+            _logger.LogInformation("Successfully provisioned tenant {TenantId}", tenantId);
+        }
+        catch (Exception) when (_tenantStore != null && controlDbTenantId.HasValue)
+        {
+            // Rollback control database record on failure
+            _logger.LogWarning("Provisioning failed, removing tenant {TenantId} from control database", tenantId);
+            await _tenantStore.DeleteTenantAsync(controlDbTenantId.Value, cancellationToken);
+            throw;
+        }
+    }
+
+    private static Guid ConvertToGuid(TKey tenantId)
+    {
+        if (typeof(TKey) == typeof(Guid))
+        {
+            return (Guid)(object)tenantId;
+        }
+
+        if (typeof(TKey) == typeof(string))
+        {
+            var stringValue = (string)(object)tenantId;
+            // Try to parse as Guid, otherwise generate a deterministic Guid from the string
+            if (Guid.TryParse(stringValue, out var guid))
+            {
+                return guid;
+            }
+            // Generate deterministic Guid from string using MD5 hash
+            using var md5 = System.Security.Cryptography.MD5.Create();
+            var hash = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(stringValue));
+            return new Guid(hash);
+        }
+
+        throw new InvalidOperationException(
+            $"Cannot convert {typeof(TKey).Name} to Guid. Control database requires TKey to be Guid or string.");
+    }
+
+    private static bool IsDuplicateKeyException(Microsoft.EntityFrameworkCore.DbUpdateException ex)
+    {
+        // Check for PostgreSQL unique constraint violation (23505)
+        // or SQL Server (2627, 2601)
+        var inner = ex.InnerException;
+        if (inner == null) return false;
+
+        var message = inner.Message;
+        return message.Contains("23505") ||  // PostgreSQL unique_violation
+               message.Contains("duplicate key") ||
+               message.Contains("unique constraint");
     }
 
     /// <summary>
@@ -196,6 +272,21 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
         await _strategy.DeleteTenantAsync(context, tenantId, hardDelete, cancellationToken);
+
+        // Also remove from control database if enabled
+        if (_tenantStore != null)
+        {
+            var guid = ConvertToGuid(tenantId);
+            try
+            {
+                await _tenantStore.DeleteTenantAsync(guid, cancellationToken);
+                _logger.LogDebug("Removed tenant {TenantId} from control database", tenantId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to remove tenant {TenantId} from control database", tenantId);
+            }
+        }
 
         await _eventPublisher.PublishTenantDeletedAsync(tenantId, hardDelete, cancellationToken);
 

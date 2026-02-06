@@ -58,7 +58,13 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     public async Task ProvisionTenantAsync(DbContext context, TKey tenantId, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);
+        
+        _logger.LogInformation("Checking that the database exists!");
 
+        // Ensure the database is created
+        await context.Database.EnsureCreatedAsync(cancellationToken);
+        
+        
         _logger.LogInformation("Provisioning schema {Schema} for tenant {TenantId}", schemaName, tenantId);
 
         if (await _schemaManager.SchemaExistsAsync(context, schemaName, cancellationToken))
@@ -112,7 +118,8 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
         {
             var tenants = await _tenantStore.GetTenantsAsync(null, cancellationToken);
             _logger.LogDebug("Using control database to enumerate {Count} tenants", tenants.Count);
-            return tenants.Select(t => t.TenantId.ToString());
+            // Return TenantSlug which is the original tenant ID string
+            return tenants.Select(t => t.TenantSlug);
         }
 
         // Fall back to schema discovery
