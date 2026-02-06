@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <PackageId>TenantCore.EntityFramework.PostgreSql</PackageId>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Description>PostgreSQL provider for TenantCore.EntityFramework with schema-per-tenant support</Description>
     <PackageTags>ef-core;entity-framework;multi-tenant;multitenancy;saas;postgresql;npgsql</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -15,7 +15,7 @@
     <RepositoryUrl>https://github.com/dotnetAL/TenantCore.EntityFramework</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <!-- <PackageIcon>icon.png</PackageIcon> -->
-    <PackageReleaseNotes>v2.1.0: Control Database feature for centralized tenant metadata</PackageReleaseNotes>
+    <PackageReleaseNotes>v2.2.0: Documentation updates and accuracy improvements</PackageReleaseNotes>
 
     <!-- Source Link for debugging -->
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
