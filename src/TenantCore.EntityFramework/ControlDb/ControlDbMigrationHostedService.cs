@@ -55,18 +55,22 @@ public class ControlDbMigrationHostedService : IHostedService
 
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
-            // EnsureCreatedAsync will:
-            // 1. Create the database if it doesn't exist (connects to postgres/master to do so)
-            // 2. Create all tables based on the model
-            var created = await context.Database.EnsureCreatedAsync(cancellationToken);
+            // Get pending migrations before applying
+            var pendingMigrations = await context.Database.GetPendingMigrationsAsync(cancellationToken);
+            var pendingList = pendingMigrations.ToList();
 
-            if (created)
+            if (pendingList.Count > 0)
             {
-                _logger.LogInformation("Control database created and schema applied successfully");
+                _logger.LogInformation("Applying {Count} pending migration(s): {Migrations}",
+                    pendingList.Count, string.Join(", ", pendingList));
+
+                await context.Database.MigrateAsync(cancellationToken);
+
+                _logger.LogInformation("Control database migrations applied successfully");
             }
             else
             {
-                _logger.LogInformation("Control database already exists, schema verified");
+                _logger.LogDebug("Control database is up to date, no pending migrations");
             }
         }
         catch (Exception ex)

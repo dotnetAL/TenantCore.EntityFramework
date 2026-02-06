@@ -28,6 +28,12 @@ public class ControlDbOptions
     public bool ApplyMigrationsOnStartup { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets the assembly containing control database migrations.
+    /// If not specified, defaults to "TenantCore.EntityFramework.PostgreSql" for PostgreSQL.
+    /// </summary>
+    public string? MigrationsAssembly { get; set; }
+
+    /// <summary>
     /// Gets or sets whether to enable caching for tenant store operations.
     /// </summary>
     public bool EnableCaching { get; set; } = true;

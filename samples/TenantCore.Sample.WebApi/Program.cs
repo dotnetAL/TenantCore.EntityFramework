@@ -46,7 +46,11 @@ builder.Services.AddHeaderTenantResolver<string>();
 if (useControlDb)
 {
     builder.Services.AddTenantControlDatabase(
-        dbOptions => dbOptions.UseNpgsql(controlDbConnectionString),
+        dbOptions => dbOptions.UseNpgsql(controlDbConnectionString, npgsql =>
+        {
+            // Control database migrations are in TenantCore.EntityFramework.PostgreSql
+            npgsql.MigrationsAssembly("TenantCore.EntityFramework.PostgreSql");
+        }),
         options =>
         {
             options.Schema = "tenant_control";
