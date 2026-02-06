@@ -148,6 +148,11 @@ public class TenantCoreOptionsBuilder<TKey> where TKey : notnull
     /// <param name="connectionString">The connection string for the control database.</param>
     /// <param name="configure">Optional action to configure control database options.</param>
     /// <returns>The builder for chaining.</returns>
+    /// <remarks>
+    /// This method configures the options only. You must also call
+    /// <see cref="Extensions.ServiceCollectionExtensions.AddTenantControlDatabase"/>
+    /// to register the control database services.
+    /// </remarks>
     public TenantCoreOptionsBuilder<TKey> UseControlDatabase(
         string connectionString,
         Action<ControlDbOptions>? configure = null)
@@ -164,6 +169,11 @@ public class TenantCoreOptionsBuilder<TKey> where TKey : notnull
     /// </summary>
     /// <typeparam name="TStore">The custom tenant store type.</typeparam>
     /// <returns>The builder for chaining.</returns>
+    /// <remarks>
+    /// This method configures the options only. You must also call
+    /// <see cref="Extensions.ServiceCollectionExtensions.AddTenantStore{TStore}"/>
+    /// to register the custom tenant store services.
+    /// </remarks>
     public TenantCoreOptionsBuilder<TKey> UseTenantStore<TStore>()
         where TStore : class, ITenantStore
     {

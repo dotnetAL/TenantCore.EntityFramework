@@ -6,6 +6,12 @@ namespace TenantCore.EntityFramework.ControlDb;
 /// <summary>
 /// Decorator that adds caching to an <see cref="ITenantStore"/> implementation.
 /// </summary>
+/// <remarks>
+/// This decorator caches tenant records by ID, slug, and API key hash.
+/// For security, passwords are never cached - <see cref="GetTenantPasswordAsync"/> always
+/// delegates directly to the inner store.
+/// Cache entries are invalidated on create, update, and delete operations.
+/// </remarks>
 public class CachedTenantStore : ITenantStore
 {
     private readonly ITenantStore _inner;

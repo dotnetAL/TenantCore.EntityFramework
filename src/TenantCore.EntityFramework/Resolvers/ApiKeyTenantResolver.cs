@@ -9,6 +9,12 @@ namespace TenantCore.EntityFramework.Resolvers;
 /// Resolves tenant from an API key header by looking up the hashed key in the tenant store.
 /// </summary>
 /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
+/// <remarks>
+/// This resolver computes a SHA-256 hash of the provided API key and looks it up in the
+/// <see cref="ITenantStore"/>. Only tenants with <see cref="TenantStatus.Active"/> status
+/// are returned. If the tenant store is not configured, the API key is invalid, or the
+/// tenant is not active, this resolver returns null/default.
+/// </remarks>
 public class ApiKeyTenantResolver<TKey> : ITenantResolver<TKey> where TKey : notnull
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
@@ -38,7 +44,7 @@ public class ApiKeyTenantResolver<TKey> : ITenantResolver<TKey> where TKey : not
     /// <param name="httpContextAccessor">The HTTP context accessor.</param>
     /// <param name="tenantStore">The tenant store for API key lookup.</param>
     /// <param name="headerName">The header name to extract API key from.</param>
-    /// <param name="parser">Optional parser to convert Guid to TKey.</param>
+    /// <param name="parser">Optional parser to convert tenant ID string to TKey.</param>
     public ApiKeyTenantResolver(
         IHttpContextAccessor httpContextAccessor,
         ITenantStore? tenantStore,

@@ -13,6 +13,7 @@ public static class ApiKeyHasher
     /// </summary>
     /// <param name="apiKey">The API key to hash.</param>
     /// <returns>The SHA-256 hash as a lowercase hexadecimal string (64 characters).</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="apiKey"/> is null.</exception>
     public static string ComputeHash(string apiKey)
     {
         ArgumentNullException.ThrowIfNull(apiKey);
