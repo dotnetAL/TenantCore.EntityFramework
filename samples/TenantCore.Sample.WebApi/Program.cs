@@ -58,8 +58,10 @@ if (useControlDb)
     builder.Services.AddApiKeyTenantResolver<string>("X-Api-Key");
 }
 
-// Add tenant-aware DbContext
-builder.Services.AddTenantDbContextPostgreSql<ApplicationDbContext, string>(connectionString);
+// Add tenant-aware DbContext with migrations from this assembly
+builder.Services.AddTenantDbContextPostgreSql<ApplicationDbContext, string>(
+    connectionString,
+    migrationsAssembly: "TenantCore.Sample.WebApi");
 
 // Add health checks
 builder.Services.AddTenantHealthChecks<ApplicationDbContext, string>("tenants");
