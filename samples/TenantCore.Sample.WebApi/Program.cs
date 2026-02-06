@@ -251,3 +251,6 @@ app.Run();
 // Request/Response models
 public record CreateProductRequest(string Name, string? Description, decimal Price);
 public record UpdateProductRequest(string Name, string? Description, decimal Price);
+
+// Make Program accessible for WebApplicationFactory in integration tests
+public partial class Program { }

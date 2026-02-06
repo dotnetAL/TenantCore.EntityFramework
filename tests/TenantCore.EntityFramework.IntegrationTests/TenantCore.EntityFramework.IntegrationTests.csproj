@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\TenantCore.EntityFramework\TenantCore.EntityFramework.csproj" />
     <ProjectReference Include="..\..\src\TenantCore.EntityFramework.PostgreSql\TenantCore.EntityFramework.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\samples\TenantCore.Sample.WebApi\TenantCore.Sample.WebApi.csproj" />
   </ItemGroup>
 
   <ItemGroup>

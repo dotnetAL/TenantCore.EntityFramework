@@ -16,8 +16,6 @@ public class TenantContextAccessor<TKey> : ITenantContextAccessor<TKey> where TK
     /// <inheritdoc />
     public void SetTenantContext(TenantContext<TKey>? context)
     {
-        var holder = TenantContextCurrent.Value;
-
         if (context != null)
         {
             // Setting a new context - create new holder to isolate from parent async contexts
@@ -27,6 +25,7 @@ public class TenantContextAccessor<TKey> : ITenantContextAccessor<TKey> where TK
         {
             // Clearing context - explicitly set to new empty holder to prevent
             // inheriting stale context from parent async contexts
+            var holder = TenantContextCurrent.Value;
             if (holder != null)
             {
                 holder.Context = null;
