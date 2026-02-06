@@ -170,4 +170,52 @@ public static class ServiceCollectionExtensions
             new SubdomainTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), baseDomain));
         return services;
     }
+
+    /// <summary>
+    /// Adds the path tenant resolver with segment index.
+    /// </summary>
+    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <param name="segmentIndex">The zero-based index of the path segment containing the tenant (default: 0).</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <remarks>
+    /// Examples with different segment indices:
+    /// <list type="bullet">
+    ///   <item>segmentIndex 0: /{tenant}/api/products</item>
+    ///   <item>segmentIndex 1: /api/{tenant}/products</item>
+    ///   <item>segmentIndex 2: /api/v1/{tenant}/products</item>
+    /// </list>
+    /// </remarks>
+    public static IServiceCollection AddPathTenantResolver<TKey>(
+        this IServiceCollection services,
+        int segmentIndex = 0)
+        where TKey : notnull
+    {
+        services.AddHttpContextAccessor();
+        services.AddScoped<ITenantResolver<TKey>>(sp =>
+            new PathTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), segmentIndex));
+        return services;
+    }
+
+    /// <summary>
+    /// Adds the path tenant resolver with a path prefix.
+    /// </summary>
+    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <param name="pathPrefix">The path prefix before the tenant segment (e.g., "/api" or "/v1/tenants").</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <remarks>
+    /// The resolver extracts tenant from the segment immediately after the prefix.
+    /// Example: With prefix "/api", request to "/api/tenant1/products" resolves to "tenant1".
+    /// </remarks>
+    public static IServiceCollection AddPathTenantResolverWithPrefix<TKey>(
+        this IServiceCollection services,
+        string pathPrefix)
+        where TKey : notnull
+    {
+        services.AddHttpContextAccessor();
+        services.AddScoped<ITenantResolver<TKey>>(sp =>
+            new PathTenantResolver<TKey>(sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(), pathPrefix));
+        return services;
+    }
 }
