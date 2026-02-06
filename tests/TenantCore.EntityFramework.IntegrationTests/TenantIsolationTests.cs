@@ -825,4 +825,999 @@ public class TenantIsolationTests
             await CleanupTenantsAsync(tenantManager, tenants.ToArray());
         }
     }
+
+    /// <summary>
+    /// CRITICAL TEST: Verifies tenant isolation when connections are reused from the pool.
+    /// This test specifically targets the connection pooling bug where search_path from a
+    /// previous tenant persisted on pooled connections.
+    ///
+    /// The bug occurs because PostgreSQL connections are pooled, and when a connection is
+    /// returned to the pool and then reused by a different tenant's request, the connection
+    /// is already open (ConnectionOpened doesn't fire again), so the search_path was never
+    /// updated to the new tenant's schema.
+    ///
+    /// This test rapidly alternates between tenants using the SAME DbContext factory to
+    /// maximize the chance of connection pool reuse, which would expose the bug.
+    /// </summary>
+    [Fact]
+    public async Task ConnectionPoolReuse_ShouldMaintainTenantIsolation()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        var tenant1 = $"pool1_{Guid.NewGuid():N}"[..15];
+        var tenant2 = $"pool2_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Provision both tenants
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
+
+            var schema1 = $"tenant_{tenant1}";
+            var schema2 = $"tenant_{tenant2}";
+
+            // Add unique data to each tenant
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                ctx.TestEntities.Add(new TestEntity { Name = "TENANT1_UNIQUE_DATA" });
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                ctx.TestEntities.Add(new TestEntity { Name = "TENANT2_UNIQUE_DATA" });
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Act & Assert - Rapidly alternate between tenants many times
+            // This maximizes the chance of connection pool reuse
+            var errors = new List<string>();
+
+            for (int iteration = 0; iteration < 50; iteration++)
+            {
+                // Query tenant1
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.ToListAsync();
+
+                    if (data.Count != 1)
+                    {
+                        errors.Add($"Iteration {iteration}: Tenant1 expected 1 record, got {data.Count}");
+                    }
+                    else if (data[0].Name != "TENANT1_UNIQUE_DATA")
+                    {
+                        errors.Add($"Iteration {iteration}: Tenant1 got wrong data: {data[0].Name}");
+                    }
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+
+                // Query tenant2 immediately after (maximizes pool reuse chance)
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.ToListAsync();
+
+                    if (data.Count != 1)
+                    {
+                        errors.Add($"Iteration {iteration}: Tenant2 expected 1 record, got {data.Count}");
+                    }
+                    else if (data[0].Name != "TENANT2_UNIQUE_DATA")
+                    {
+                        errors.Add($"Iteration {iteration}: Tenant2 got wrong data: {data[0].Name}");
+                    }
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+
+            // If any errors occurred, the connection pool was leaking tenant data
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
+        }
+    }
+
+    /// <summary>
+    /// Tests that parallel requests from different tenants maintain isolation.
+    /// This simulates a real web server handling concurrent requests for different tenants.
+    /// </summary>
+    [Fact]
+    public async Task ParallelTenantRequests_ShouldMaintainIsolation()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+
+        var tenant1 = $"par1_{Guid.NewGuid():N}"[..15];
+        var tenant2 = $"par2_{Guid.NewGuid():N}"[..15];
+        var tenant3 = $"par3_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Provision all tenants
+            using (var scope = sp.CreateScope())
+            {
+                var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+                await tenantManager.ProvisionTenantAsync(tenant1);
+                await tenantManager.ProvisionTenantAsync(tenant2);
+                await tenantManager.ProvisionTenantAsync(tenant3);
+            }
+
+            // Add data to each tenant with unique identifiers
+            var tenants = new[] { tenant1, tenant2, tenant3 };
+            foreach (var tenant in tenants)
+            {
+                using var scope = sp.CreateScope();
+                var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+                var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+                var schema = $"tenant_{tenant}";
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    for (int i = 0; i < 5; i++)
+                    {
+                        ctx.TestEntities.Add(new TestEntity { Name = $"{tenant}_record_{i}" });
+                    }
+                    await ctx.SaveChangesAsync();
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+
+            // Act - Query all tenants in parallel, simulating concurrent web requests
+            var tasks = tenants.Select(async tenant =>
+            {
+                var errors = new List<string>();
+
+                // Each "request" uses its own scope (like ASP.NET Core does)
+                using var scope = sp.CreateScope();
+                var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+                var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+                var schema = $"tenant_{tenant}";
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.ToListAsync();
+
+                    // Verify count
+                    if (data.Count != 5)
+                    {
+                        errors.Add($"Tenant {tenant} expected 5 records, got {data.Count}");
+                    }
+
+                    // Verify all records belong to this tenant
+                    foreach (var record in data)
+                    {
+                        if (!record.Name.StartsWith(tenant))
+                        {
+                            errors.Add($"Tenant {tenant} got record from another tenant: {record.Name}");
+                        }
+                    }
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+
+                return errors;
+            });
+
+            var allErrors = await Task.WhenAll(tasks);
+            var flatErrors = allErrors.SelectMany(e => e).ToList();
+
+            // Assert
+            Assert.Empty(flatErrors);
+        }
+        finally
+        {
+            using var cleanupScope = sp.CreateScope();
+            var cleanupTenantManager = cleanupScope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+            await CleanupTenantsAsync(cleanupTenantManager, tenant1, tenant2, tenant3);
+        }
+    }
+
+    /// <summary>
+    /// Tests that interleaved read/write operations across tenants maintain isolation.
+    /// This catches bugs where write operations might affect the wrong tenant's data.
+    /// </summary>
+    [Fact]
+    public async Task InterleavedReadWriteOperations_ShouldMaintainIsolation()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        var tenant1 = $"rw1_{Guid.NewGuid():N}"[..15];
+        var tenant2 = $"rw2_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Provision both tenants
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
+
+            var schema1 = $"tenant_{tenant1}";
+            var schema2 = $"tenant_{tenant2}";
+
+            // Interleaved operations: write to tenant1, write to tenant2, read both
+            for (int i = 0; i < 10; i++)
+            {
+                // Write to tenant1
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    ctx.TestEntities.Add(new TestEntity { Name = $"T1_Batch{i}" });
+                    await ctx.SaveChangesAsync();
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+
+                // Write to tenant2
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    ctx.TestEntities.Add(new TestEntity { Name = $"T2_Batch{i}" });
+                    await ctx.SaveChangesAsync();
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+
+                // Verify tenant1 only sees its data
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var count = await ctx.TestEntities.CountAsync();
+                    Assert.Equal(i + 1, count);
+
+                    var hasWrongData = await ctx.TestEntities.AnyAsync(e => e.Name.StartsWith("T2_"));
+                    Assert.False(hasWrongData, $"Tenant1 should not see Tenant2 data at iteration {i}");
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+
+                // Verify tenant2 only sees its data
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var count = await ctx.TestEntities.CountAsync();
+                    Assert.Equal(i + 1, count);
+
+                    var hasWrongData = await ctx.TestEntities.AnyAsync(e => e.Name.StartsWith("T1_"));
+                    Assert.False(hasWrongData, $"Tenant2 should not see Tenant1 data at iteration {i}");
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
+        }
+    }
+
+    /// <summary>
+    /// Tests that UPDATE and DELETE operations affect only the correct tenant's data.
+    /// </summary>
+    [Fact]
+    public async Task UpdateDeleteOperations_ShouldOnlyAffectCurrentTenant()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        var tenant1 = $"ud1_{Guid.NewGuid():N}"[..15];
+        var tenant2 = $"ud2_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Provision both tenants
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
+
+            var schema1 = $"tenant_{tenant1}";
+            var schema2 = $"tenant_{tenant2}";
+
+            // Add identical records to both tenants
+            foreach (var (tenant, schema) in new[] { (tenant1, schema1), (tenant2, schema2) })
+            {
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    ctx.TestEntities.Add(new TestEntity { Name = "SharedName" });
+                    ctx.TestEntities.Add(new TestEntity { Name = "ToDelete" });
+                    ctx.TestEntities.Add(new TestEntity { Name = "ToUpdate" });
+                    await ctx.SaveChangesAsync();
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+
+            // Update "ToUpdate" in tenant1 only
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var entity = await ctx.TestEntities.FirstAsync(e => e.Name == "ToUpdate");
+                entity.Name = "Updated_By_Tenant1";
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Delete "ToDelete" in tenant1 only
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var entity = await ctx.TestEntities.FirstAsync(e => e.Name == "ToDelete");
+                ctx.TestEntities.Remove(entity);
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Verify tenant1 state
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var data = await ctx.TestEntities.OrderBy(e => e.Name).ToListAsync();
+
+                Assert.Equal(2, data.Count);
+                Assert.Contains(data, e => e.Name == "SharedName");
+                Assert.Contains(data, e => e.Name == "Updated_By_Tenant1");
+                Assert.DoesNotContain(data, e => e.Name == "ToDelete");
+                Assert.DoesNotContain(data, e => e.Name == "ToUpdate");
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Verify tenant2 state is UNCHANGED
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var data = await ctx.TestEntities.OrderBy(e => e.Name).ToListAsync();
+
+                Assert.Equal(3, data.Count);
+                Assert.Contains(data, e => e.Name == "SharedName");
+                Assert.Contains(data, e => e.Name == "ToDelete"); // Still exists!
+                Assert.Contains(data, e => e.Name == "ToUpdate"); // Still original!
+                Assert.DoesNotContain(data, e => e.Name == "Updated_By_Tenant1");
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
+        }
+    }
+
+    /// <summary>
+    /// Tests rapid context switching to catch any race conditions or state leakage.
+    /// Uses a high iteration count with minimal delay between operations.
+    /// </summary>
+    [Fact]
+    public async Task RapidContextSwitching_ShouldNeverLeakData()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        var tenants = Enumerable.Range(1, 3)
+            .Select(i => $"rapid{i}_{Guid.NewGuid():N}"[..15])
+            .ToList();
+
+        try
+        {
+            // Provision all tenants
+            foreach (var tenant in tenants)
+            {
+                await tenantManager.ProvisionTenantAsync(tenant);
+            }
+
+            // Add unique data to each tenant
+            foreach (var tenant in tenants)
+            {
+                var schema = $"tenant_{tenant}";
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    ctx.TestEntities.Add(new TestEntity { Name = $"MARKER_{tenant}" });
+                    await ctx.SaveChangesAsync();
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+
+            // Rapid switching test - 100 iterations
+            var random = new Random(42); // Fixed seed for reproducibility
+            var errors = new List<string>();
+
+            for (int i = 0; i < 100; i++)
+            {
+                // Pick a random tenant
+                var tenant = tenants[random.Next(tenants.Count)];
+                var schema = $"tenant_{tenant}";
+
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.ToListAsync();
+
+                    // Should only have 1 record with this tenant's marker
+                    if (data.Count != 1)
+                    {
+                        errors.Add($"Iteration {i}: Tenant {tenant} expected 1 record, got {data.Count}");
+                    }
+                    else if (data[0].Name != $"MARKER_{tenant}")
+                    {
+                        errors.Add($"Iteration {i}: Tenant {tenant} got wrong marker: {data[0].Name}");
+                    }
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
+        }
+    }
+
+    /// <summary>
+    /// CRITICAL TEST: Verifies that querying without a tenant context does not leak data
+    /// from a previously used tenant on the same pooled connection.
+    ///
+    /// This tests the scenario where:
+    /// 1. Request A sets tenant context, queries tenant_a schema
+    /// 2. Request B has NO tenant context (e.g., excluded path, or resolution failed with ReturnNull)
+    /// 3. Request B should NOT see tenant_a's data even though connection might be reused
+    /// </summary>
+    [Fact]
+    public async Task QueryWithoutTenantContext_ShouldNotLeakPreviousTenantData()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        var tenant1 = $"leak1_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Provision tenant and add data
+            await tenantManager.ProvisionTenantAsync(tenant1);
+
+            var schema1 = $"tenant_{tenant1}";
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                ctx.TestEntities.Add(new TestEntity { Name = "SECRET_TENANT_DATA" });
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Verify tenant data exists when context is set
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var count = await ctx.TestEntities.CountAsync();
+                Assert.Equal(1, count);
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Act - Query WITHOUT tenant context (simulates request without tenant header)
+            // The connection might be reused from the pool with tenant1's search_path
+            // but with our fix, search_path should be reset to 'public'
+            tenantContextAccessor.SetTenantContext(null);
+
+            // Query multiple times to increase chance of connection pool reuse
+            for (int i = 0; i < 10; i++)
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+
+                // This query should hit 'public' schema, not tenant schema
+                // The table doesn't exist in public schema, so this should either:
+                // - Return 0 records (if table exists in public)
+                // - Throw an exception (if table doesn't exist in public)
+                // Either way, it should NOT return "SECRET_TENANT_DATA"
+                try
+                {
+                    var data = await ctx.TestEntities.ToListAsync();
+                    // If we get here, table exists in public - verify no tenant data leaked
+                    Assert.DoesNotContain(data, e => e.Name == "SECRET_TENANT_DATA");
+                }
+                catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01") // relation does not exist
+                {
+                    // Expected - table doesn't exist in public schema
+                    // This is fine - the important thing is we didn't leak tenant data
+                }
+            }
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenant1);
+        }
+    }
+
+    /// <summary>
+    /// Tests the scenario where tenant context switches from tenant A to null to tenant B.
+    /// This should never allow tenant B to see tenant A's data.
+    /// </summary>
+    [Fact]
+    public async Task TenantContextSwitchThroughNull_ShouldMaintainIsolation()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        var tenant1 = $"null1_{Guid.NewGuid():N}"[..15];
+        var tenant2 = $"null2_{Guid.NewGuid():N}"[..15];
+
+        try
+        {
+            // Provision both tenants
+            await tenantManager.ProvisionTenantAsync(tenant1);
+            await tenantManager.ProvisionTenantAsync(tenant2);
+
+            var schema1 = $"tenant_{tenant1}";
+            var schema2 = $"tenant_{tenant2}";
+
+            // Add data to tenant1
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                ctx.TestEntities.Add(new TestEntity { Name = "TENANT1_SECRET" });
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Add data to tenant2
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                ctx.TestEntities.Add(new TestEntity { Name = "TENANT2_SECRET" });
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Act & Assert - Switch through null context pattern multiple times
+            for (int i = 0; i < 20; i++)
+            {
+                // Query tenant1
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant1, schema1));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.SingleAsync();
+                    Assert.Equal("TENANT1_SECRET", data.Name);
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+
+                // Clear context (simulates request without tenant)
+                tenantContextAccessor.SetTenantContext(null);
+
+                // Query tenant2 - should NOT see tenant1 data
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant2, schema2));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.SingleAsync();
+                    Assert.Equal("TENANT2_SECRET", data.Name);
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenant1, tenant2);
+        }
+    }
+
+    /// <summary>
+    /// COMPREHENSIVE END-TO-END TEST: Provisions 10 tenants, adds data to only 3 of them,
+    /// and verifies complete isolation - only those 3 tenants should see data.
+    ///
+    /// This test validates the entire tenant lifecycle:
+    /// 1. Schema creation via ProvisionTenantAsync
+    /// 2. Table creation via migrations (not EnsureCreatedAsync in public schema)
+    /// 3. Data insertion respects tenant context
+    /// 4. Data queries respect tenant context
+    /// 5. Empty tenants return no data (not data from other tenants)
+    /// </summary>
+    [Fact]
+    public async Task TenTenants_DataInThree_OthersShouldBeEmpty()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var tenantContextAccessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TestDbContext>>();
+
+        // Create 10 unique tenant IDs
+        var testRunId = Guid.NewGuid().ToString("N")[..8];
+        var tenants = Enumerable.Range(1, 10)
+            .Select(i => $"t{i}_{testRunId}")
+            .ToList();
+
+        // Define which tenants will have data (5, 6, 7 - using 0-based index: 4, 5, 6)
+        var tenantsWithData = new[] { tenants[4], tenants[5], tenants[6] }; // tenants 5, 6, 7
+        var tenantsWithoutData = tenants.Except(tenantsWithData).ToList();  // tenants 1, 2, 3, 4, 8, 9, 10
+
+        // Track expected data per tenant
+        var expectedData = new Dictionary<string, List<string>>();
+
+        try
+        {
+            // ============================================================
+            // STEP 1: Provision all 10 tenants
+            // ============================================================
+            foreach (var tenant in tenants)
+            {
+                await tenantManager.ProvisionTenantAsync(tenant);
+                expectedData[tenant] = new List<string>();
+            }
+
+            // Verify all 10 tenants were created
+            var allTenants = (await tenantManager.GetTenantsAsync()).ToList();
+            foreach (var tenant in tenants)
+            {
+                Assert.Contains(tenant, allTenants);
+            }
+
+            // ============================================================
+            // STEP 2: Add items ONLY to tenants 5, 6, and 7
+            // ============================================================
+
+            // Add 3 items to tenant 5 (index 4)
+            var tenant5 = tenants[4];
+            var schema5 = $"tenant_{tenant5}";
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant5, schema5));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                for (int i = 1; i <= 3; i++)
+                {
+                    var name = $"Tenant5_Product_{i}";
+                    ctx.TestEntities.Add(new TestEntity { Name = name, CreatedAt = DateTime.UtcNow });
+                    expectedData[tenant5].Add(name);
+                }
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Add 5 items to tenant 6 (index 5)
+            var tenant6 = tenants[5];
+            var schema6 = $"tenant_{tenant6}";
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant6, schema6));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                for (int i = 1; i <= 5; i++)
+                {
+                    var name = $"Tenant6_Product_{i}";
+                    ctx.TestEntities.Add(new TestEntity { Name = name, CreatedAt = DateTime.UtcNow });
+                    expectedData[tenant6].Add(name);
+                }
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Add 2 items to tenant 7 (index 6)
+            var tenant7 = tenants[6];
+            var schema7 = $"tenant_{tenant7}";
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant7, schema7));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                for (int i = 1; i <= 2; i++)
+                {
+                    var name = $"Tenant7_Product_{i}";
+                    ctx.TestEntities.Add(new TestEntity { Name = name, CreatedAt = DateTime.UtcNow });
+                    expectedData[tenant7].Add(name);
+                }
+                await ctx.SaveChangesAsync();
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // ============================================================
+            // STEP 3: Verify tenants 5, 6, 7 have their data
+            // ============================================================
+
+            // Verify tenant 5 has exactly 3 items
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant5, schema5));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var data = await ctx.TestEntities.ToListAsync();
+
+                Assert.Equal(3, data.Count);
+                foreach (var expectedName in expectedData[tenant5])
+                {
+                    Assert.Contains(data, e => e.Name == expectedName);
+                }
+                // Verify no data from other tenants
+                Assert.All(data, e => Assert.StartsWith("Tenant5_", e.Name));
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Verify tenant 6 has exactly 5 items
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant6, schema6));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var data = await ctx.TestEntities.ToListAsync();
+
+                Assert.Equal(5, data.Count);
+                foreach (var expectedName in expectedData[tenant6])
+                {
+                    Assert.Contains(data, e => e.Name == expectedName);
+                }
+                // Verify no data from other tenants
+                Assert.All(data, e => Assert.StartsWith("Tenant6_", e.Name));
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // Verify tenant 7 has exactly 2 items
+            tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant7, schema7));
+            try
+            {
+                await using var ctx = await contextFactory.CreateDbContextAsync();
+                var data = await ctx.TestEntities.ToListAsync();
+
+                Assert.Equal(2, data.Count);
+                foreach (var expectedName in expectedData[tenant7])
+                {
+                    Assert.Contains(data, e => e.Name == expectedName);
+                }
+                // Verify no data from other tenants
+                Assert.All(data, e => Assert.StartsWith("Tenant7_", e.Name));
+            }
+            finally
+            {
+                tenantContextAccessor.SetTenantContext(null);
+            }
+
+            // ============================================================
+            // STEP 4: Verify all OTHER tenants (1,2,3,4,8,9,10) are EMPTY
+            // ============================================================
+
+            foreach (var tenant in tenantsWithoutData)
+            {
+                var schema = $"tenant_{tenant}";
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.ToListAsync();
+
+                    // This tenant should have NO data
+                    Assert.Empty(data);
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+
+            // ============================================================
+            // STEP 5: Cross-verification - ensure no data leakage
+            // ============================================================
+
+            // Query each tenant and ensure they don't see other tenants' data
+            foreach (var tenant in tenants)
+            {
+                var schema = $"tenant_{tenant}";
+                tenantContextAccessor.SetTenantContext(new TenantContext<string>(tenant, schema));
+                try
+                {
+                    await using var ctx = await contextFactory.CreateDbContextAsync();
+                    var data = await ctx.TestEntities.ToListAsync();
+
+                    // Check that this tenant doesn't have any data from OTHER tenants
+                    foreach (var otherTenant in tenants.Where(t => t != tenant))
+                    {
+                        var otherTenantPrefix = otherTenant == tenant5 ? "Tenant5_" :
+                                                otherTenant == tenant6 ? "Tenant6_" :
+                                                otherTenant == tenant7 ? "Tenant7_" : null;
+
+                        if (otherTenantPrefix != null)
+                        {
+                            Assert.DoesNotContain(data, e => e.Name.StartsWith(otherTenantPrefix));
+                        }
+                    }
+                }
+                finally
+                {
+                    tenantContextAccessor.SetTenantContext(null);
+                }
+            }
+        }
+        finally
+        {
+            // Cleanup all 10 tenants
+            await CleanupTenantsAsync(tenantManager, tenants.ToArray());
+        }
+    }
+
+    /// <summary>
+    /// Tests that schemas are actually created in the database and tables exist in tenant schemas,
+    /// NOT in the public schema. This directly tests the EnsureCreatedAsync fix.
+    /// </summary>
+    [Fact]
+    public async Task TenantProvisioning_TablesShouldBeInTenantSchema_NotPublicSchema()
+    {
+        // Arrange
+        await using var sp = BuildServiceProvider();
+        using var scope = sp.CreateScope();
+        var tenantManager = scope.ServiceProvider.GetRequiredService<ITenantManager<string>>();
+        var schemaManager = scope.ServiceProvider.GetRequiredService<ISchemaManager>();
+
+        var tenant = $"schematest_{Guid.NewGuid():N}"[..15];
+        var schemaName = $"tenant_{tenant}";
+
+        try
+        {
+            // Act - Provision the tenant
+            await tenantManager.ProvisionTenantAsync(tenant);
+
+            // Assert - Query the database directly to verify table locations
+            var options = new DbContextOptionsBuilder<TestDbContext>()
+                .UseNpgsql(_fixture.ConnectionString)
+                .Options;
+
+            await using var context = new TestDbContext(options);
+            var connection = context.Database.GetDbConnection();
+            await connection.OpenAsync();
+
+            // Check that TestEntities table exists in TENANT schema
+            await using var cmd1 = connection.CreateCommand();
+            cmd1.CommandText = $@"
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = '{schemaName}'
+                AND table_name = 'TestEntities'";
+            var tableInTenantSchema = Convert.ToInt32(await cmd1.ExecuteScalarAsync());
+            Assert.Equal(1, tableInTenantSchema);
+
+            // Check that TestEntities table does NOT exist in PUBLIC schema
+            // (This would fail if EnsureCreatedAsync bug was present)
+            await using var cmd2 = connection.CreateCommand();
+            cmd2.CommandText = @"
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_name = 'TestEntities'";
+            var tableInPublicSchema = Convert.ToInt32(await cmd2.ExecuteScalarAsync());
+            Assert.Equal(0, tableInPublicSchema);
+
+            // Check that __EFMigrationsHistory exists in TENANT schema
+            await using var cmd3 = connection.CreateCommand();
+            cmd3.CommandText = $@"
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = '{schemaName}'
+                AND table_name = '__EFMigrationsHistory'";
+            var migrationsInTenantSchema = Convert.ToInt32(await cmd3.ExecuteScalarAsync());
+            Assert.Equal(1, migrationsInTenantSchema);
+        }
+        finally
+        {
+            await CleanupTenantsAsync(tenantManager, tenant);
+        }
+    }
 }

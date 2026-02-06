@@ -58,13 +58,7 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     public async Task ProvisionTenantAsync(DbContext context, TKey tenantId, CancellationToken cancellationToken = default)
     {
         var schemaName = _options.GenerateSchemaName(tenantId);
-        
-        _logger.LogInformation("Checking that the database exists!");
 
-        // Ensure the database is created
-        await context.Database.EnsureCreatedAsync(cancellationToken);
-        
-        
         _logger.LogInformation("Provisioning schema {Schema} for tenant {TenantId}", schemaName, tenantId);
 
         if (await _schemaManager.SchemaExistsAsync(context, schemaName, cancellationToken))
@@ -72,6 +66,11 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
             throw new TenantAlreadyExistsException(tenantId);
         }
 
+        // Create the tenant schema - tables will be created by migrations
+        // CRITICAL: Do NOT call EnsureCreatedAsync() here as it would create tables
+        // in the public schema (no tenant context is set at this point).
+        // The TenantMigrationRunner.MigrateTenantAsync() will create tables
+        // in the correct tenant schema.
         await _schemaManager.CreateSchemaAsync(context, schemaName, cancellationToken);
 
         _logger.LogInformation("Successfully provisioned schema {Schema} for tenant {TenantId}", schemaName, tenantId);
