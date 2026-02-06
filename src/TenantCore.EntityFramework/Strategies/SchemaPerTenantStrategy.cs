@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
+using TenantCore.EntityFramework.ControlDb;
 
 namespace TenantCore.EntityFramework.Strategies;
 
@@ -13,6 +14,7 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
 {
     private readonly SchemaPerTenantOptions _options;
     private readonly ISchemaManager _schemaManager;
+    private readonly ITenantStore? _tenantStore;
     private readonly ILogger<SchemaPerTenantStrategy<TKey>> _logger;
 
     /// <inheritdoc />
@@ -24,13 +26,16 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     /// <param name="options">The tenant configuration options.</param>
     /// <param name="schemaManager">The schema manager.</param>
     /// <param name="logger">The logger instance.</param>
+    /// <param name="tenantStore">The optional tenant store for control database integration.</param>
     public SchemaPerTenantStrategy(
         TenantCoreOptions options,
         ISchemaManager schemaManager,
-        ILogger<SchemaPerTenantStrategy<TKey>> logger)
+        ILogger<SchemaPerTenantStrategy<TKey>> logger,
+        ITenantStore? tenantStore = null)
     {
         _options = options.SchemaPerTenant;
         _schemaManager = schemaManager;
+        _tenantStore = tenantStore;
         _logger = logger;
     }
 
@@ -102,6 +107,15 @@ public class SchemaPerTenantStrategy<TKey> : ITenantStrategy<TKey> where TKey : 
     /// <inheritdoc />
     public async Task<IEnumerable<string>> GetTenantsAsync(DbContext context, CancellationToken cancellationToken = default)
     {
+        // If tenant store is available, delegate to it
+        if (_tenantStore != null)
+        {
+            var tenants = await _tenantStore.GetTenantsAsync(null, cancellationToken);
+            _logger.LogDebug("Using control database to enumerate {Count} tenants", tenants.Count);
+            return tenants.Select(t => t.TenantId.ToString());
+        }
+
+        // Fall back to schema discovery
         var schemas = await _schemaManager.GetSchemasAsync(context, _options.SchemaPrefix, cancellationToken);
         return schemas.Select(s => _options.ExtractTenantId(s));
     }

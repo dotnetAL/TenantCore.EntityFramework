@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
+using TenantCore.EntityFramework.ControlDb;
 using TenantCore.EntityFramework.Events;
 using TenantCore.EntityFramework.Utilities;
 
@@ -25,6 +26,7 @@ public class TenantMigrationRunner<TContext, TKey>
     private readonly ITenantStrategy<TKey> _strategy;
     private readonly ITenantContextAccessor<TKey> _contextAccessor;
     private readonly ITenantEventPublisher<TKey> _eventPublisher;
+    private readonly ITenantStore? _tenantStore;
     private readonly ILogger<TenantMigrationRunner<TContext, TKey>> _logger;
 
     /// <summary>
@@ -36,19 +38,22 @@ public class TenantMigrationRunner<TContext, TKey>
     /// <param name="contextAccessor">The tenant context accessor.</param>
     /// <param name="eventPublisher">The event publisher.</param>
     /// <param name="logger">The logger instance.</param>
+    /// <param name="tenantStore">The optional tenant store for control database integration.</param>
     public TenantMigrationRunner(
         IServiceProvider serviceProvider,
         TenantCoreOptions options,
         ITenantStrategy<TKey> strategy,
         ITenantContextAccessor<TKey> contextAccessor,
         ITenantEventPublisher<TKey> eventPublisher,
-        ILogger<TenantMigrationRunner<TContext, TKey>> logger)
+        ILogger<TenantMigrationRunner<TContext, TKey>> logger,
+        ITenantStore? tenantStore = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
         _strategy = strategy;
         _contextAccessor = contextAccessor;
         _eventPublisher = eventPublisher;
+        _tenantStore = tenantStore;
         _logger = logger;
     }
 
@@ -58,38 +63,33 @@ public class TenantMigrationRunner<TContext, TKey>
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task MigrateAllTenantsAsync(CancellationToken cancellationToken = default)
     {
-        using var scope = _serviceProvider.CreateScope();
-        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
+        var tenantList = await GetMigratableTenantsAsync(cancellationToken);
 
-        await using var tempContext = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var tenantIds = await _strategy.GetTenantsAsync(tempContext, cancellationToken);
-
-        var tenantList = tenantIds.ToList();
         _logger.LogInformation("Starting migration for {Count} tenants", tenantList.Count);
 
         var migrationOptions = _options.Migrations;
         var semaphore = new SemaphoreSlim(migrationOptions.ParallelMigrations);
         var failures = new List<(string TenantId, Exception Exception)>();
 
-        var tasks = tenantList.Select(async tenantIdString =>
+        var tasks = tenantList.Select(async tenant =>
         {
             await semaphore.WaitAsync(cancellationToken);
             try
             {
-                var schemaName = _options.SchemaPerTenant.GenerateSchemaName(tenantIdString);
-                var tenantId = TenantKeyParser<TKey>.Parse(tenantIdString);
+                var schemaName = tenant.Schema;
+                var tenantId = TenantKeyParser<TKey>.Parse(tenant.TenantIdString);
                 await MigrateTenantInternalAsync(schemaName, tenantId, cancellationToken);
             }
             catch (Exception ex) when (migrationOptions.FailureBehavior != MigrationFailureBehavior.StopAll)
             {
                 lock (failures)
                 {
-                    failures.Add((tenantIdString, ex));
+                    failures.Add((tenant.TenantIdString, ex));
                 }
 
                 if (migrationOptions.FailureBehavior == MigrationFailureBehavior.Skip)
                 {
-                    _logger.LogWarning(ex, "Migration failed for tenant {TenantId}, skipping", tenantIdString);
+                    _logger.LogWarning(ex, "Migration failed for tenant {TenantId}, skipping", tenant.TenantIdString);
                 }
             }
             finally
@@ -116,6 +116,35 @@ public class TenantMigrationRunner<TContext, TKey>
         {
             _logger.LogInformation("Successfully migrated all {Count} tenants", tenantList.Count);
         }
+    }
+
+    private async Task<List<(string TenantIdString, string Schema)>> GetMigratableTenantsAsync(
+        CancellationToken cancellationToken)
+    {
+        // If tenant store is available, use it to get tenants with migratable statuses
+        if (_tenantStore != null)
+        {
+            var migratableStatuses = _options.ControlDb.MigratableStatuses;
+            var tenants = await _tenantStore.GetTenantsAsync(migratableStatuses, cancellationToken);
+
+            _logger.LogDebug("Using control database to enumerate {Count} tenants with statuses: {Statuses}",
+                tenants.Count, string.Join(", ", migratableStatuses));
+
+            return tenants
+                .Select(t => (t.TenantId.ToString(), t.TenantSchema))
+                .ToList();
+        }
+
+        // Fall back to schema discovery
+        using var scope = _serviceProvider.CreateScope();
+        var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
+
+        await using var tempContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var tenantIds = await _strategy.GetTenantsAsync(tempContext, cancellationToken);
+
+        return tenantIds
+            .Select(id => (id, _options.SchemaPerTenant.GenerateSchemaName(id)))
+            .ToList();
     }
 
     /// <summary>

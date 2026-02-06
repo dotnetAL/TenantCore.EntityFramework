@@ -21,6 +21,11 @@ public class TenantCoreOptions
     public MigrationOptions Migrations { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets the control database options.
+    /// </summary>
+    public ControlDbOptions ControlDb { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets the behavior when tenant resolution fails.
     /// </summary>
     public TenantNotFoundBehavior TenantNotFoundBehavior { get; set; } = TenantNotFoundBehavior.Throw;

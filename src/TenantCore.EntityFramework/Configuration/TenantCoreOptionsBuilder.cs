@@ -1,4 +1,5 @@
 using TenantCore.EntityFramework.Abstractions;
+using TenantCore.EntityFramework.ControlDb;
 
 namespace TenantCore.EntityFramework.Configuration;
 
@@ -137,6 +138,48 @@ public class TenantCoreOptionsBuilder<TKey> where TKey : notnull
     public TenantCoreOptionsBuilder<TKey> DisableTenantValidation()
     {
         _options.ValidateTenantOnResolution = false;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the control database for storing tenant metadata.
+    /// This enables the built-in control database implementation.
+    /// </summary>
+    /// <param name="connectionString">The connection string for the control database.</param>
+    /// <param name="configure">Optional action to configure control database options.</param>
+    /// <returns>The builder for chaining.</returns>
+    public TenantCoreOptionsBuilder<TKey> UseControlDatabase(
+        string connectionString,
+        Action<ControlDbOptions>? configure = null)
+    {
+        _options.ControlDb.Enabled = true;
+        _options.ControlDb.ConnectionString = connectionString;
+        configure?.Invoke(_options.ControlDb);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a custom tenant store implementation (BYO pattern).
+    /// Use this when you want to provide your own tenant storage mechanism.
+    /// </summary>
+    /// <typeparam name="TStore">The custom tenant store type.</typeparam>
+    /// <returns>The builder for chaining.</returns>
+    public TenantCoreOptionsBuilder<TKey> UseTenantStore<TStore>()
+        where TStore : class, ITenantStore
+    {
+        _options.ControlDb.Enabled = true;
+        _options.ControlDb.CustomTenantStoreType = typeof(TStore);
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the control database options.
+    /// </summary>
+    /// <param name="configure">Action to configure control database options.</param>
+    /// <returns>The builder for chaining.</returns>
+    public TenantCoreOptionsBuilder<TKey> ConfigureControlDatabase(Action<ControlDbOptions> configure)
+    {
+        configure(_options.ControlDb);
         return this;
     }
 }

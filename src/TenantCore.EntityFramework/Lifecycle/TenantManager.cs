@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
+using TenantCore.EntityFramework.ControlDb;
 using TenantCore.EntityFramework.Events;
 using TenantCore.EntityFramework.Migrations;
 
@@ -24,6 +25,7 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
     private readonly ITenantScopeFactory<TKey> _scopeFactory;
     private readonly TenantMigrationRunner<TContext, TKey> _migrationRunner;
     private readonly ITenantEventPublisher<TKey> _eventPublisher;
+    private readonly ITenantStore? _tenantStore;
     private readonly ILogger<TenantManager<TContext, TKey>> _logger;
 
     /// <summary>
@@ -35,6 +37,7 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
     /// <param name="scopeFactory">The tenant scope factory.</param>
     /// <param name="migrationRunner">The migration runner.</param>
     /// <param name="eventPublisher">The event publisher.</param>
+    /// <param name="tenantStore">The optional tenant store for control database integration.</param>
     /// <param name="logger">The logger instance.</param>
     public TenantManager(
         IServiceProvider serviceProvider,
@@ -43,7 +46,8 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
         ITenantScopeFactory<TKey> scopeFactory,
         TenantMigrationRunner<TContext, TKey> migrationRunner,
         ITenantEventPublisher<TKey> eventPublisher,
-        ILogger<TenantManager<TContext, TKey>> logger)
+        ILogger<TenantManager<TContext, TKey>> logger,
+        ITenantStore? tenantStore = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
@@ -51,6 +55,7 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
         _scopeFactory = scopeFactory;
         _migrationRunner = migrationRunner;
         _eventPublisher = eventPublisher;
+        _tenantStore = tenantStore;
         _logger = logger;
     }
 
@@ -78,6 +83,87 @@ public class TenantManager<TContext, TKey> : ITenantManager<TKey>
         await _eventPublisher.PublishTenantCreatedAsync(tenantId, cancellationToken);
 
         _logger.LogInformation("Successfully provisioned tenant {TenantId}", tenantId);
+    }
+
+    /// <summary>
+    /// Provisions a new tenant with control database integration.
+    /// Creates the tenant record in the control database, provisions the schema, and sets status to Active.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier (must be Guid).</param>
+    /// <param name="request">The tenant creation request containing metadata.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The created tenant record.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when control database is not configured or TKey is not Guid.</exception>
+    public async Task<TenantRecord> ProvisionTenantAsync(
+        Guid tenantId,
+        CreateTenantRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (_tenantStore == null)
+        {
+            throw new InvalidOperationException(
+                "Control database is not configured. Use UseControlDatabase() or UseTenantStore() in configuration.");
+        }
+
+        _logger.LogInformation("Provisioning tenant {TenantId} with slug {TenantSlug}", tenantId, request.TenantSlug);
+
+        // Create tenant record in control database (status: Pending)
+        var tenantRecord = await _tenantStore.CreateTenantAsync(tenantId, request, cancellationToken);
+
+        try
+        {
+            // Convert Guid to TKey for provisioning
+            var tenantIdAsKey = ConvertToTKey(tenantId);
+
+            using var scope = _serviceProvider.CreateScope();
+            var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
+
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+            // Create the schema
+            await _strategy.ProvisionTenantAsync(context, tenantIdAsKey, cancellationToken);
+
+            // Apply migrations
+            await _migrationRunner.MigrateTenantAsync(tenantIdAsKey, cancellationToken);
+
+            // Run seeders
+            await RunSeedersAsync(tenantIdAsKey, cancellationToken);
+
+            // Update status to Active
+            tenantRecord = await _tenantStore.UpdateStatusAsync(tenantId, TenantStatus.Active, cancellationToken);
+
+            // Publish event
+            await _eventPublisher.PublishTenantCreatedAsync(tenantIdAsKey, cancellationToken);
+
+            _logger.LogInformation("Successfully provisioned tenant {TenantId}", tenantId);
+
+            return tenantRecord;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to provision tenant {TenantId}, rolling back control database record", tenantId);
+
+            // Rollback: delete the tenant record from control database
+            await _tenantStore.DeleteTenantAsync(tenantId, cancellationToken);
+
+            throw;
+        }
+    }
+
+    private static TKey ConvertToTKey(Guid guid)
+    {
+        if (typeof(TKey) == typeof(Guid))
+        {
+            return (TKey)(object)guid;
+        }
+
+        if (typeof(TKey) == typeof(string))
+        {
+            return (TKey)(object)guid.ToString();
+        }
+
+        throw new InvalidOperationException(
+            $"Cannot convert Guid to {typeof(TKey).Name}. Control database provisioning requires TKey to be Guid or string.");
     }
 
     /// <inheritdoc />
