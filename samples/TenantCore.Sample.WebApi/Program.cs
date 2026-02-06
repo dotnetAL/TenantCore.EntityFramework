@@ -65,7 +65,33 @@ builder.Services.AddTenantDbContextPostgreSql<ApplicationDbContext, string>(conn
 builder.Services.AddTenantHealthChecks<ApplicationDbContext, string>("tenants");
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "TenantCore Sample API",
+        Version = "v1",
+        Description = "Sample API demonstrating multi-tenant functionality with TenantCore"
+    });
+
+    // Add X-Tenant-Id header parameter for tenant-scoped endpoints
+    options.AddSecurityDefinition("TenantId", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Name = "X-Tenant-Id",
+        Description = "Tenant identifier for multi-tenant operations"
+    });
+
+    // Add X-Api-Key header for API key authentication (when control database is enabled)
+    options.AddSecurityDefinition("ApiKey", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Name = "X-Api-Key",
+        Description = "API key for tenant authentication (alternative to X-Tenant-Id)"
+    });
+});
 
 var app = builder.Build();
 
@@ -96,6 +122,8 @@ app.MapPost("/api/tenants/{tenantId}", async (
     }
 })
 .WithName("CreateTenant")
+.WithTags("Tenant Management")
+.WithDescription("Create a new tenant and provision its database schema")
 .WithOpenApi();
 
 app.MapGet("/api/tenants", async (ITenantManager<string> tenantManager) =>
@@ -104,6 +132,8 @@ app.MapGet("/api/tenants", async (ITenantManager<string> tenantManager) =>
     return Results.Ok(tenants);
 })
 .WithName("ListTenants")
+.WithTags("Tenant Management")
+.WithDescription("List all provisioned tenants")
 .WithOpenApi();
 
 app.MapDelete("/api/tenants/{tenantId}", async (
@@ -122,26 +152,49 @@ app.MapDelete("/api/tenants/{tenantId}", async (
     }
 })
 .WithName("DeleteTenant")
+.WithTags("Tenant Management")
+.WithDescription("Delete a tenant. Use hardDelete=true to permanently remove all data.")
 .WithOpenApi();
 
-// Product endpoints (tenant-scoped)
-app.MapGet("/api/products", async (ApplicationDbContext db) =>
+// Product endpoints (tenant-scoped) - require X-Tenant-Id header
+var productEndpoints = app.MapGroup("/api/products")
+    .WithTags("Products (Tenant-Scoped)")
+    .WithOpenApi(operation =>
+    {
+        operation.Security.Add(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+        {
+            {
+                new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+                {
+                    Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                    {
+                        Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                        Id = "TenantId"
+                    }
+                },
+                Array.Empty<string>()
+            }
+        });
+        return operation;
+    });
+
+productEndpoints.MapGet("", async (ApplicationDbContext db) =>
 {
     var products = await db.Products.ToListAsync();
     return Results.Ok(products);
 })
 .WithName("GetProducts")
-.WithOpenApi();
+.WithDescription("Get all products for the current tenant. Requires X-Tenant-Id header.");
 
-app.MapGet("/api/products/{id:int}", async (int id, ApplicationDbContext db) =>
+productEndpoints.MapGet("/{id:int}", async (int id, ApplicationDbContext db) =>
 {
     var product = await db.Products.FindAsync(id);
     return product != null ? Results.Ok(product) : Results.NotFound();
 })
 .WithName("GetProduct")
-.WithOpenApi();
+.WithDescription("Get a specific product by ID. Requires X-Tenant-Id header.");
 
-app.MapPost("/api/products", async (CreateProductRequest request, ApplicationDbContext db) =>
+productEndpoints.MapPost("", async (CreateProductRequest request, ApplicationDbContext db) =>
 {
     var product = new Product
     {
@@ -156,9 +209,9 @@ app.MapPost("/api/products", async (CreateProductRequest request, ApplicationDbC
     return Results.Created($"/api/products/{product.Id}", product);
 })
 .WithName("CreateProduct")
-.WithOpenApi();
+.WithDescription("Create a new product for the current tenant. Requires X-Tenant-Id header.");
 
-app.MapPut("/api/products/{id:int}", async (int id, UpdateProductRequest request, ApplicationDbContext db) =>
+productEndpoints.MapPut("/{id:int}", async (int id, UpdateProductRequest request, ApplicationDbContext db) =>
 {
     var product = await db.Products.FindAsync(id);
     if (product == null)
@@ -174,9 +227,9 @@ app.MapPut("/api/products/{id:int}", async (int id, UpdateProductRequest request
     return Results.Ok(product);
 })
 .WithName("UpdateProduct")
-.WithOpenApi();
+.WithDescription("Update an existing product. Requires X-Tenant-Id header.");
 
-app.MapDelete("/api/products/{id:int}", async (int id, ApplicationDbContext db) =>
+productEndpoints.MapDelete("/{id:int}", async (int id, ApplicationDbContext db) =>
 {
     var product = await db.Products.FindAsync(id);
     if (product == null)
@@ -189,7 +242,7 @@ app.MapDelete("/api/products/{id:int}", async (int id, ApplicationDbContext db) 
     return Results.NoContent();
 })
 .WithName("DeleteProduct")
-.WithOpenApi();
+.WithDescription("Delete a product. Requires X-Tenant-Id header.");
 
 app.Run();
 
