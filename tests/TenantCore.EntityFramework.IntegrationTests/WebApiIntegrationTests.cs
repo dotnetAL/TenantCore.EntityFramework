@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -56,8 +57,16 @@ public class WebApiIntegrationTests : IAsyncLifetime
                     {
                         ["ConnectionStrings:DefaultConnection"] = _fixture.ConnectionString,
                         ["ConnectionStrings:ControlDatabase"] = _fixture.ConnectionString,
-                        ["TenantCore:UseControlDatabase"] = "false"
+                        ["TenantCore:UseControlDatabase"] = "false",
+                        ["TenantCore:Migrations:ApplyOnStartup"] = "false"
                     });
+                });
+
+                builder.ConfigureServices(services =>
+                {
+                    // Remove hosted migration services to avoid discovering foreign
+                    // tenant schemas from other test classes sharing the same database
+                    services.RemoveAll<IHostedService>();
                 });
             });
 

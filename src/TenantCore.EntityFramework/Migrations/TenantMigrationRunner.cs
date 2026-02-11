@@ -321,6 +321,25 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""{escapedHistoryTable}"" (
             $@"INSERT INTO\s+{historyTablePattern}",
             $@"INSERT INTO {schemaQualifiedHistoryTable}");
 
+        // When a custom history table is configured, EF Core's GenerateScript() still
+        // emits INSERT INTO "__EFMigrationsHistory". Replace these with the custom table.
+        if (migrationHistoryTable != "__EFMigrationsHistory")
+        {
+            var defaultHistoryPattern = @"(?:""[^""]+""\.|\w+\.)?""__EFMigrationsHistory""";
+
+            modifiedSql = Regex.Replace(modifiedSql,
+                $@"INSERT INTO\s+{defaultHistoryPattern}",
+                $@"INSERT INTO {schemaQualifiedHistoryTable}");
+
+            modifiedSql = Regex.Replace(modifiedSql,
+                $@"CREATE TABLE IF NOT EXISTS\s+{defaultHistoryPattern}",
+                $@"CREATE TABLE IF NOT EXISTS {schemaQualifiedHistoryTable}");
+
+            modifiedSql = Regex.Replace(modifiedSql,
+                $@"CREATE TABLE\s+{defaultHistoryPattern}",
+                $@"CREATE TABLE IF NOT EXISTS {schemaQualifiedHistoryTable}");
+        }
+
         // Build the final SQL with search_path
         var builder = new StringBuilder();
         builder.AppendLine($"SET search_path TO \"{escapedSchema}\", public;");

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
 using TenantCore.EntityFramework.Context;
+using TenantCore.EntityFramework.Migrations;
 
 namespace TenantCore.EntityFramework.Extensions;
 
@@ -99,13 +100,16 @@ public static class TenantContextAccessorExtensions
 
             accessor.SetTenantContext(new TenantContext<TKey>(tenantId, schemaName));
 
+            // Ensure schema exists
             var contextFactory = serviceProvider.GetRequiredService<IDbContextFactory<TContext>>();
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
             var schemaManager = serviceProvider.GetRequiredService<ISchemaManager>();
             await schemaManager.CreateSchemaAsync(context, schemaName, cancellationToken);
 
-            await context.Database.MigrateAsync(cancellationToken);
+            // Delegate to TenantMigrationRunner for schema-qualified SQL
+            var migrationRunner = serviceProvider.GetRequiredService<TenantMigrationRunner<TContext, TKey>>();
+            await migrationRunner.MigrateTenantAsync(tenantId, cancellationToken);
         }
         finally
         {
