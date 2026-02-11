@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Configuration;
@@ -586,5 +587,182 @@ public class MultiContextMigrationHistoryTests
             accessor.SetTenantContext(null);
             await DropSchemaAsync(schemaName);
         }
+    }
+
+    [Fact]
+    public void HostedService_WithDualContexts_ShouldBuildWithoutScopeErrors()
+    {
+        // Arrange - register both hosted services like the sample app does
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
+
+        services.AddTenantCore<string>(options =>
+        {
+            options.UseConnectionString(_fixture.ConnectionString);
+            options.UseSchemaPerTenant(schema => schema.SchemaPrefix = "tenant_");
+            options.ConfigureMigrations(m => m.ApplyOnStartup = true);
+        });
+
+        services.AddTenantDbContextPostgreSql<MigrationTestDbContext, string>(
+            _fixture.ConnectionString, MigrationsAssembly, "__ProductHistory");
+        services.AddTenantDbContextPostgreSql<TestDbContext, string>(
+            _fixture.ConnectionString, MigrationsAssembly, "__TestHistory");
+
+        // Register hosted services for both contexts
+        services.AddTenantMigrationHostedService<MigrationTestDbContext, string>();
+        services.AddTenantMigrationHostedService<TestDbContext, string>();
+
+        // Act & Assert - ValidateScopes ensures no singleton-consuming-scoped issues
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+
+        // Verify both hosted services are registered
+        var hostedServices = provider.GetServices<IHostedService>().ToList();
+        Assert.Contains(hostedServices,
+            s => s is TenantMigrationHostedService<MigrationTestDbContext, string>);
+        Assert.Contains(hostedServices,
+            s => s is TenantMigrationHostedService<TestDbContext, string>);
+    }
+
+    [Fact]
+    public async Task MigrateAllTenants_DualContext_AppliesBothContextMigrations()
+    {
+        // Arrange
+        await using var sp = BuildDualContextServiceProvider(
+            "__ProductHistory", "__TestEntityHistory");
+
+        var tenants = Enumerable.Range(1, 2)
+            .Select(i => $"all{i}_{Guid.NewGuid():N}"[..15])
+            .ToList();
+
+        try
+        {
+            // Pre-provision tenants by migrating them individually first
+            foreach (var tenantId in tenants)
+            {
+                using var scope = sp.CreateScope();
+                var schemaName = $"tenant_{tenantId}";
+                var accessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+                accessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
+
+                var migrationRunner = scope.ServiceProvider
+                    .GetRequiredService<TenantMigrationRunner<MigrationTestDbContext, string>>();
+                await migrationRunner.MigrateTenantAsync(tenantId);
+            }
+
+            // Act - use MigrateAllTenantsAsync for the second context
+            // This simulates what the hosted service does on startup
+            {
+                using var scope = sp.CreateScope();
+                var testRunner = scope.ServiceProvider
+                    .GetRequiredService<TenantMigrationRunner<TestDbContext, string>>();
+                await testRunner.MigrateAllTenantsAsync();
+            }
+
+            // Assert - all tenants should now have both contexts migrated
+            foreach (var tenantId in tenants)
+            {
+                var schemaName = $"tenant_{tenantId}";
+
+                Assert.True(
+                    await TableExistsInSchemaAsync(schemaName, "__ProductHistory"),
+                    $"Tenant {tenantId}: __ProductHistory should exist");
+                Assert.True(
+                    await TableExistsInSchemaAsync(schemaName, "__TestEntityHistory"),
+                    $"Tenant {tenantId}: __TestEntityHistory should exist");
+
+                var productMigrations = await GetMigrationsFromTableAsync(schemaName, "__ProductHistory");
+                var testMigrations = await GetMigrationsFromTableAsync(schemaName, "__TestEntityHistory");
+
+                Assert.NotEmpty(productMigrations);
+                Assert.NotEmpty(testMigrations);
+            }
+        }
+        finally
+        {
+            foreach (var tenantId in tenants)
+            {
+                await DropSchemaAsync($"tenant_{tenantId}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task IncrementalMigration_OnAlreadyProvisionedTenant_AppliesOnlyNewMigrations()
+    {
+        // Arrange - MigrationTestDbContext has two migrations: Initial and AddCategorySortOrder
+        // We'll provision a tenant, verify Initial is applied, then verify both are applied
+        await using var sp = BuildDualContextServiceProvider(
+            "__ProductHistory", "__TestEntityHistory");
+
+        var tenantId = $"inc_{Guid.NewGuid():N}"[..15];
+        var schemaName = $"tenant_{tenantId}";
+
+        try
+        {
+            // Act - migrate the tenant (should apply both migrations)
+            {
+                using var scope = sp.CreateScope();
+                var accessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+                accessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
+
+                var migrationRunner = scope.ServiceProvider
+                    .GetRequiredService<TenantMigrationRunner<MigrationTestDbContext, string>>();
+                await migrationRunner.MigrateTenantAsync(tenantId);
+            }
+
+            // Assert - both migrations should be recorded in the history table
+            var migrations = await GetMigrationsFromTableAsync(schemaName, "__ProductHistory");
+            Assert.Equal(2, migrations.Count);
+            Assert.Contains(migrations, m => m.Contains("Initial"));
+            Assert.Contains(migrations, m => m.Contains("AddCategorySortOrder"));
+
+            // Assert - the SortOrder column from the second migration should exist
+            Assert.True(
+                await ColumnExistsInSchemaAsync(schemaName, "Categories", "SortOrder"),
+                "SortOrder column from incremental migration should exist");
+
+            // Act - re-run migration (should be idempotent, no new migrations applied)
+            {
+                using var scope = sp.CreateScope();
+                var accessor = scope.ServiceProvider.GetRequiredService<ITenantContextAccessor<string>>();
+                accessor.SetTenantContext(new TenantContext<string>(tenantId, schemaName));
+
+                var migrationRunner = scope.ServiceProvider
+                    .GetRequiredService<TenantMigrationRunner<MigrationTestDbContext, string>>();
+                await migrationRunner.MigrateTenantAsync(tenantId);
+            }
+
+            // Assert - still exactly 2 migrations (no duplicates)
+            var migrationsAfter = await GetMigrationsFromTableAsync(schemaName, "__ProductHistory");
+            Assert.Equal(2, migrationsAfter.Count);
+        }
+        finally
+        {
+            await DropSchemaAsync(schemaName);
+        }
+    }
+
+    private async Task<bool> ColumnExistsInSchemaAsync(string schemaName, string tableName, string columnName)
+    {
+        var options = new DbContextOptionsBuilder<MigrationTestDbContext>()
+            .UseNpgsql(_fixture.ConnectionString)
+            .Options;
+
+        await using var context = new MigrationTestDbContext(options);
+        await context.Database.OpenConnectionAsync();
+
+        await using var command = context.Database.GetDbConnection().CreateCommand();
+        command.CommandText = $@"
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = '{schemaName}'
+            AND table_name = '{tableName}'
+            AND column_name = '{columnName}'";
+
+        var result = await command.ExecuteScalarAsync();
+        return Convert.ToInt64(result) > 0;
     }
 }

@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -286,41 +288,41 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""{escapedHistoryTable}"" (
         var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
         var escapedHistoryTable = SqlIdentifierHelper.EscapeDoubleQuotes(migrationHistoryTable);
 
-        // Remove EF-generated schema creation blocks (DO $EF$ ... END $EF$;)
-        // These reference the cached schema from DbContextOptions and are incorrect
-        // for tenants other than the first one. We create the schema in setup SQL instead.
-        var modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+        // Remove EF-generated schema creation blocks (DO $EF$ BEGIN ... END $EF$;)
+        // These contain CREATE SCHEMA IF NOT EXISTS for the cached schema from DbContextOptions
+        // and are incorrect for tenants other than the first one. We create the schema in setup SQL instead.
+        var modifiedSql = Regex.Replace(
             sql,
-            @"DO \$EF\$.*?END \$EF\$;\s*",
+            @"DO \$EF\$\s*BEGIN\b.*?END \$EF\$;\s*",
             string.Empty,
-            System.Text.RegularExpressions.RegexOptions.Singleline);
+            RegexOptions.Singleline);
 
         // Replace any schema-qualified history table references.
         // EF Core may generate these with quoted ("schema"."table") or unquoted (schema."table")
         // schema names, depending on the provider. The schema may be stale (from a cached
         // DbContextOptions for a different tenant), so we replace it with the correct target.
-        var escapedHistoryTableRegex = System.Text.RegularExpressions.Regex.Escape(escapedHistoryTable);
+        var escapedHistoryTableRegex = Regex.Escape(escapedHistoryTable);
         // Matches: optional_schema."historyTable" where schema can be quoted or unquoted
-        var historyTablePattern = $@"(?:""[^""]+""\.|\w+\.)?""{ escapedHistoryTableRegex}""";
+        var historyTablePattern = $@"(?:""[^""]+""\.|\w+\.)?\""{escapedHistoryTableRegex}\""";
         var schemaQualifiedHistoryTable = $@"""{escapedSchema}"".""{escapedHistoryTable}""";
 
-        modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+        modifiedSql = Regex.Replace(
             modifiedSql,
             $@"CREATE TABLE IF NOT EXISTS\s+{historyTablePattern}",
             $@"CREATE TABLE IF NOT EXISTS {schemaQualifiedHistoryTable}");
 
-        modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+        modifiedSql = Regex.Replace(
             modifiedSql,
             $@"CREATE TABLE\s+{historyTablePattern}",
             $@"CREATE TABLE IF NOT EXISTS {schemaQualifiedHistoryTable}");
 
-        modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+        modifiedSql = Regex.Replace(
             modifiedSql,
             $@"INSERT INTO\s+{historyTablePattern}",
             $@"INSERT INTO {schemaQualifiedHistoryTable}");
 
         // Build the final SQL with search_path
-        var builder = new System.Text.StringBuilder();
+        var builder = new StringBuilder();
         builder.AppendLine($"SET search_path TO \"{escapedSchema}\", public;");
         builder.AppendLine();
         builder.Append(modifiedSql);
@@ -364,7 +366,11 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""{escapedHistoryTable}"" (
                 applied.Add(reader.GetString(0));
             }
         }
-        catch
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (System.Data.Common.DbException)
         {
             // Table may not exist yet - that means no migrations are applied
         }

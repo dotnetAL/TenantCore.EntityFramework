@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Context;
 using TenantCore.EntityFramework.Extensions;
+using TenantCore.EntityFramework.Migrations;
 using TenantCore.EntityFramework.PostgreSql;
 using TenantCore.Sample.WebApi;
 
@@ -128,16 +129,15 @@ app.MapHealthChecks("/health");
 app.MapPost("/api/tenants/{tenantId}", async (
     string tenantId,
     ITenantManager<string> tenantManager,
-    ITenantContextAccessor<string> accessor,
-    IServiceProvider sp) =>
+    TenantMigrationRunner<InventoryDbContext, string> inventoryMigrationRunner) =>
 {
     try
     {
-        // Provision creates the schema and applies ApplicationDbContext migrations
+        // Provision creates the schema and applies ApplicationDbContext migrations via TenantMigrationRunner
         await tenantManager.ProvisionTenantAsync(tenantId);
 
-        // Also apply InventoryDbContext migrations to the same tenant schema
-        await accessor.MigrateTenantAsync<InventoryDbContext, string>(tenantId, sp);
+        // Also apply InventoryDbContext migrations to the same tenant schema via TenantMigrationRunner
+        await inventoryMigrationRunner.MigrateTenantAsync(tenantId);
 
         return Results.Created($"/api/tenants/{tenantId}", new { tenantId, message = "Tenant created successfully" });
     }
@@ -272,13 +272,13 @@ productEndpoints.MapDelete("/{id:int}", async (int id, ApplicationDbContext db) 
 // On-demand per-tenant migration endpoint (migrates both contexts)
 app.MapPost("/api/tenants/{tenantId}/migrate", async (
     string tenantId,
-    ITenantContextAccessor<string> accessor,
-    IServiceProvider sp) =>
+    TenantMigrationRunner<ApplicationDbContext, string> appMigrationRunner,
+    TenantMigrationRunner<InventoryDbContext, string> inventoryMigrationRunner) =>
 {
     try
     {
-        await accessor.MigrateTenantAsync<ApplicationDbContext, string>(tenantId, sp);
-        await accessor.MigrateTenantAsync<InventoryDbContext, string>(tenantId, sp);
+        await appMigrationRunner.MigrateTenantAsync(tenantId);
+        await inventoryMigrationRunner.MigrateTenantAsync(tenantId);
         return Results.Ok(new { tenantId, message = "Migrations applied for both contexts" });
     }
     catch (Exception ex)

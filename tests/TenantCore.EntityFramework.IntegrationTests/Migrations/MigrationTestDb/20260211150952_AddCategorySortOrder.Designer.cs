@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TenantCore.EntityFramework.IntegrationTests;
@@ -11,9 +12,11 @@ using TenantCore.EntityFramework.IntegrationTests;
 namespace TenantCore.EntityFramework.IntegrationTests.Migrations.MigrationTestDb
 {
     [DbContext(typeof(MigrationTestDbContext))]
-    partial class MigrationTestDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260211150952_AddCategorySortOrder")]
+    partial class AddCategorySortOrder
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
