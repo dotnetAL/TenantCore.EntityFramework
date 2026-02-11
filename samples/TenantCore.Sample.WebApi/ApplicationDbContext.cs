@@ -28,7 +28,8 @@ public class ApplicationDbContext : TenantDbContext<string>
             entity.Property(e => e.Name).HasMaxLength(200).IsRequired();
             entity.Property(e => e.Description).HasMaxLength(1000);
             entity.Property(e => e.Price).HasPrecision(18, 2);
-
+            entity.Property(e => e.CategoryName).HasMaxLength(200);
+            
             entity.HasOne(e => e.Category)
                 .WithMany(c => c.Products)
                 .HasForeignKey(e => e.CategoryId)
@@ -53,6 +54,8 @@ public class Product
     public Category? Category { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
+    public string CategoryName { get; set; } = string.Empty;
+    
 }
 
 public class Category

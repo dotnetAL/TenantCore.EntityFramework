@@ -14,11 +14,13 @@ public class MigrationTracker
     /// <typeparam name="TContext">The DbContext type.</typeparam>
     /// <param name="context">A DbContext instance.</param>
     /// <param name="tenantSchemas">The list of tenant schema names.</param>
+    /// <param name="migrationHistoryTable">The name of the migrations history table. Defaults to "__EFMigrationsHistory".</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A dictionary of tenant schema to migration status.</returns>
     public async Task<Dictionary<string, TenantMigrationStatus>> GetMigrationStatusAsync<TContext>(
         TContext context,
         IEnumerable<string> tenantSchemas,
+        string migrationHistoryTable = "__EFMigrationsHistory",
         CancellationToken cancellationToken = default) where TContext : DbContext
     {
         var result = new Dictionary<string, TenantMigrationStatus>();
@@ -28,7 +30,7 @@ public class MigrationTracker
         {
             try
             {
-                var appliedMigrations = await GetAppliedMigrationsForSchemaAsync(context, schema, cancellationToken);
+                var appliedMigrations = await GetAppliedMigrationsForSchemaAsync(context, schema, migrationHistoryTable, cancellationToken);
                 var pendingMigrations = allMigrations.Except(appliedMigrations).ToList();
 
                 result[schema] = new TenantMigrationStatus
@@ -58,10 +60,12 @@ public class MigrationTracker
     private async Task<List<string>> GetAppliedMigrationsForSchemaAsync<TContext>(
         TContext context,
         string schema,
-        CancellationToken cancellationToken) where TContext : DbContext
+        string migrationHistoryTable = "__EFMigrationsHistory",
+        CancellationToken cancellationToken = default) where TContext : DbContext
     {
         var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schema);
-        var historyTable = $"\"{escapedSchema}\".\"__EFMigrationsHistory\"";
+        var escapedHistoryTable = SqlIdentifierHelper.EscapeDoubleQuotes(migrationHistoryTable);
+        var historyTable = $"\"{escapedSchema}\".\"{escapedHistoryTable}\"";
 
         var sql = $@"
             SELECT ""MigrationId""

@@ -65,6 +65,39 @@ public static class PostgreSqlExtensions
     }
 
     /// <summary>
+    /// Adds a tenant-aware DbContext configured for PostgreSQL with migrations from a separate assembly
+    /// and a per-context migration history table name.
+    /// </summary>
+    /// <typeparam name="TContext">The DbContext type.</typeparam>
+    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <param name="connectionString">The PostgreSQL connection string.</param>
+    /// <param name="migrationsAssembly">The name of the assembly containing migrations. If null, uses the DbContext's assembly.</param>
+    /// <param name="migrationHistoryTable">Per-context migration history table name. If null, falls back to global <see cref="TenantCoreOptions.Migrations"/>.</param>
+    /// <param name="npgsqlOptionsAction">Optional action to configure Npgsql options.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddTenantDbContextPostgreSql<TContext, TKey>(
+        this IServiceCollection services,
+        string connectionString,
+        string? migrationsAssembly,
+        string? migrationHistoryTable,
+        Action<Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder>? npgsqlOptionsAction = null)
+        where TContext : TenantDbContext<TKey>
+        where TKey : notnull
+    {
+        if (migrationHistoryTable != null)
+        {
+            services.AddSingleton(new TenantDbContextOptions<TContext>
+            {
+                MigrationHistoryTable = migrationHistoryTable
+            });
+        }
+
+        return services.AddTenantDbContextPostgreSql<TContext, TKey>(
+            connectionString, migrationsAssembly, npgsqlOptionsAction);
+    }
+
+    /// <summary>
     /// Adds a tenant-aware DbContext configured for PostgreSQL with migrations from a separate assembly.
     /// </summary>
     /// <typeparam name="TContext">The DbContext type.</typeparam>
@@ -93,6 +126,15 @@ public static class PostgreSqlExtensions
             var tenantAccessor = sp.GetService<ITenantContextAccessor<TKey>>();
             var currentSchema = tenantAccessor?.TenantContext?.SchemaName;
 
+            // Read configured migration history table name and separation setting
+            // Per-context options take precedence over global options
+            var contextOptions = sp.GetService<TenantDbContextOptions<TContext>>();
+            var tenantCoreOptions = sp.GetService<TenantCoreOptions>();
+            var migrationHistoryTable = contextOptions?.MigrationHistoryTable
+                ?? tenantCoreOptions?.Migrations.MigrationHistoryTable
+                ?? "__EFMigrationsHistory";
+            var separateMigrationHistory = tenantCoreOptions?.Migrations.SeparateMigrationHistory ?? true;
+
             options.UseNpgsql(connectionString, npgsql =>
             {
                 // Set migrations assembly if specified
@@ -102,10 +144,10 @@ public static class PostgreSqlExtensions
                 }
 
                 // Set migrations history table to the current tenant's schema
-                // This ensures __EFMigrationsHistory is created in the tenant schema
-                if (!string.IsNullOrEmpty(currentSchema))
+                // This ensures the history table is created in the tenant schema
+                if (separateMigrationHistory && !string.IsNullOrEmpty(currentSchema))
                 {
-                    npgsql.MigrationsHistoryTable("__EFMigrationsHistory", currentSchema);
+                    npgsql.MigrationsHistoryTable(migrationHistoryTable, currentSchema);
                 }
 
                 npgsqlOptionsAction?.Invoke(npgsql);

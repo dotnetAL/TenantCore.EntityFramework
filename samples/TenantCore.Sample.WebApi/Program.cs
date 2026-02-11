@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TenantCore.EntityFramework.Abstractions;
+using TenantCore.EntityFramework.Context;
 using TenantCore.EntityFramework.Extensions;
 using TenantCore.EntityFramework.PostgreSql;
 using TenantCore.Sample.WebApi;
@@ -62,10 +63,16 @@ if (useControlDb)
     builder.Services.AddApiKeyTenantResolver<string>("X-Api-Key");
 }
 
-// Add tenant-aware DbContext with migrations from this assembly
+// Add tenant-aware DbContexts with per-context migration history tables
 builder.Services.AddTenantDbContextPostgreSql<ApplicationDbContext, string>(
     connectionString,
-    migrationsAssembly: "TenantCore.Sample.WebApi");
+    migrationsAssembly: "TenantCore.Sample.WebApi",
+    migrationHistoryTable: "__ProductMigrations");
+
+builder.Services.AddTenantDbContextPostgreSql<InventoryDbContext, string>(
+    connectionString,
+    migrationsAssembly: "TenantCore.Sample.WebApi",
+    migrationHistoryTable: "__InventoryMigrations");
 
 // Add health checks
 builder.Services.AddTenantHealthChecks<ApplicationDbContext, string>("tenants");
@@ -250,11 +257,130 @@ productEndpoints.MapDelete("/{id:int}", async (int id, ApplicationDbContext db) 
 .WithName("DeleteProduct")
 .WithDescription("Delete a product. Requires X-Tenant-Id header.");
 
+// On-demand per-tenant migration endpoint (migrates both contexts)
+app.MapPost("/api/tenants/{tenantId}/migrate", async (
+    string tenantId,
+    ITenantContextAccessor<string> accessor,
+    IServiceProvider sp) =>
+{
+    try
+    {
+        await accessor.MigrateTenantAsync<ApplicationDbContext, string>(tenantId, sp);
+        await accessor.MigrateTenantAsync<InventoryDbContext, string>(tenantId, sp);
+        return Results.Ok(new { tenantId, message = "Migrations applied for both contexts" });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(detail: ex.Message, title: "Migration failed");
+    }
+})
+.WithName("MigrateTenant")
+.WithTags("Tenant Management")
+.WithDescription("Apply pending migrations for a specific tenant (both Product and Inventory contexts)")
+.WithOpenApi();
+
+// Admin endpoint to get products for a specific tenant
+app.MapGet("/api/tenants/{tenantId}/products", async (
+    string tenantId,
+    ITenantContextAccessor<string> accessor,
+    IServiceProvider sp) =>
+{
+    using var scope = new TenantScope<string>(
+        accessor,
+        tenantId,
+        $"tenant_{tenantId}");
+
+    await using var context = await accessor.GetTenantDbContextAsync<ApplicationDbContext, string>(sp);
+    var products = await context.Products.ToListAsync();
+    return Results.Ok(products);
+})
+.WithName("GetTenantProducts")
+.WithTags("Tenant Management")
+.WithDescription("Get all products for a specific tenant (admin endpoint)")
+.WithOpenApi();
+
+// Order endpoints (tenant-scoped) - require X-Tenant-Id header
+var orderEndpoints = app.MapGroup("/api/orders")
+    .WithTags("Orders (Tenant-Scoped)")
+    .WithOpenApi(operation =>
+    {
+        operation.Security.Add(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+        {
+            {
+                new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+                {
+                    Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                    {
+                        Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                        Id = "TenantId"
+                    }
+                },
+                Array.Empty<string>()
+            }
+        });
+        return operation;
+    });
+
+orderEndpoints.MapGet("", async (InventoryDbContext db) =>
+{
+    var orders = await db.Orders.Include(o => o.Items).ToListAsync();
+    return Results.Ok(orders);
+})
+.WithName("GetOrders")
+.WithDescription("Get all orders for the current tenant. Requires X-Tenant-Id header.");
+
+orderEndpoints.MapGet("/{id:int}", async (int id, InventoryDbContext db) =>
+{
+    var order = await db.Orders.Include(o => o.Items).FirstOrDefaultAsync(o => o.Id == id);
+    return order != null ? Results.Ok(order) : Results.NotFound();
+})
+.WithName("GetOrder")
+.WithDescription("Get a specific order by ID. Requires X-Tenant-Id header.");
+
+orderEndpoints.MapPost("", async (CreateOrderRequest request, InventoryDbContext db) =>
+{
+    var order = new Order
+    {
+        CustomerName = request.CustomerName,
+        TotalAmount = request.Items.Sum(i => i.Quantity * i.UnitPrice),
+        Items = request.Items.Select(i => new OrderItem
+        {
+            ProductName = i.ProductName,
+            Quantity = i.Quantity,
+            UnitPrice = i.UnitPrice
+        }).ToList()
+    };
+
+    db.Orders.Add(order);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/api/orders/{order.Id}", order);
+})
+.WithName("CreateOrder")
+.WithDescription("Create a new order for the current tenant. Requires X-Tenant-Id header.");
+
+orderEndpoints.MapDelete("/{id:int}", async (int id, InventoryDbContext db) =>
+{
+    var order = await db.Orders.FindAsync(id);
+    if (order == null)
+    {
+        return Results.NotFound();
+    }
+
+    db.Orders.Remove(order);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+})
+.WithName("DeleteOrder")
+.WithDescription("Delete an order. Requires X-Tenant-Id header.");
+
 app.Run();
 
 // Request/Response models
 public record CreateProductRequest(string Name, string? Description, decimal Price);
 public record UpdateProductRequest(string Name, string? Description, decimal Price);
+public record CreateOrderItemRequest(string ProductName, int Quantity, decimal UnitPrice);
+public record CreateOrderRequest(string CustomerName, List<CreateOrderItemRequest> Items);
 
 // Make Program accessible for WebApplicationFactory in integration tests
 public partial class Program { }

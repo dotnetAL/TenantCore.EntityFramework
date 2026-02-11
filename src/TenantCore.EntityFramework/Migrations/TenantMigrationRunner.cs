@@ -23,6 +23,7 @@ public class TenantMigrationRunner<TContext, TKey>
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly TenantCoreOptions _options;
+    private readonly TenantDbContextOptions<TContext>? _contextOptions;
     private readonly ITenantStrategy<TKey> _strategy;
     private readonly ITenantContextAccessor<TKey> _contextAccessor;
     private readonly ITenantEventPublisher<TKey> _eventPublisher;
@@ -38,6 +39,7 @@ public class TenantMigrationRunner<TContext, TKey>
     /// <param name="contextAccessor">The tenant context accessor.</param>
     /// <param name="eventPublisher">The event publisher.</param>
     /// <param name="logger">The logger instance.</param>
+    /// <param name="contextOptions">Optional per-context options for migration history table override.</param>
     /// <param name="tenantStore">The optional tenant store for control database integration.</param>
     public TenantMigrationRunner(
         IServiceProvider serviceProvider,
@@ -46,10 +48,12 @@ public class TenantMigrationRunner<TContext, TKey>
         ITenantContextAccessor<TKey> contextAccessor,
         ITenantEventPublisher<TKey> eventPublisher,
         ILogger<TenantMigrationRunner<TContext, TKey>> logger,
+        TenantDbContextOptions<TContext>? contextOptions = null,
         ITenantStore? tenantStore = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
+        _contextOptions = contextOptions;
         _strategy = strategy;
         _contextAccessor = contextAccessor;
         _eventPublisher = eventPublisher;
@@ -233,15 +237,18 @@ public class TenantMigrationRunner<TContext, TKey>
     {
         var migrator = context.GetService<IMigrator>();
         var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
+        var migrationHistoryTable = _contextOptions?.MigrationHistoryTable
+            ?? _options.Migrations.MigrationHistoryTable;
+        var escapedHistoryTable = SqlIdentifierHelper.EscapeDoubleQuotes(migrationHistoryTable);
 
         // First, ensure the schema and migrations history table exist
         var setupSql = $@"
 CREATE SCHEMA IF NOT EXISTS ""{escapedSchema}"";
 SET search_path TO ""{escapedSchema}"", public;
-CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
+CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""{escapedHistoryTable}"" (
     ""MigrationId"" character varying(150) NOT NULL,
     ""ProductVersion"" character varying(32) NOT NULL,
-    CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY (""MigrationId"")
+    CONSTRAINT ""PK_{escapedHistoryTable}"" PRIMARY KEY (""MigrationId"")
 );";
 
         await context.Database.ExecuteSqlRawAsync(setupSql, cancellationToken);
@@ -258,7 +265,7 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
 
             await using var cmd = connection.CreateCommand();
             cmd.CommandText = $@"
-                SELECT ""MigrationId"" FROM ""{escapedSchema}"".""__EFMigrationsHistory""
+                SELECT ""MigrationId"" FROM ""{escapedSchema}"".""{escapedHistoryTable}""
                 ORDER BY ""MigrationId"" DESC LIMIT 1";
             var result = await cmd.ExecuteScalarAsync(cancellationToken);
             lastAppliedMigration = result as string;
@@ -280,7 +287,7 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
         }
 
         // Inject schema into the SQL
-        var schemaQualifiedSql = InjectSchemaIntoMigrationSql(sql, schemaName);
+        var schemaQualifiedSql = InjectSchemaIntoMigrationSql(sql, schemaName, migrationHistoryTable);
 
         _logger.LogDebug("Executing schema-qualified migration SQL for schema {Schema}. SQL length: {Length}",
             schemaName, schemaQualifiedSql.Length);
@@ -295,9 +302,10 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
     /// 1. Setting search_path so unqualified names resolve to tenant schema
     /// 2. Updating the __EFMigrationsHistory table references to be schema-qualified
     /// </summary>
-    private static string InjectSchemaIntoMigrationSql(string sql, string schemaName)
+    private static string InjectSchemaIntoMigrationSql(string sql, string schemaName, string migrationHistoryTable)
     {
         var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
+        var escapedHistoryTable = SqlIdentifierHelper.EscapeDoubleQuotes(migrationHistoryTable);
 
         // Build the schema-qualified SQL
         var builder = new System.Text.StringBuilder();
@@ -306,15 +314,15 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""__EFMigrationsHistory"" (
         builder.AppendLine($"SET search_path TO \"{escapedSchema}\", public;");
         builder.AppendLine();
 
-        // Replace __EFMigrationsHistory references to be schema-qualified
+        // Replace migration history table references to be schema-qualified
         // This handles both CREATE TABLE and INSERT INTO statements
         var modifiedSql = sql
             .Replace(
-                "CREATE TABLE \"__EFMigrationsHistory\"",
-                $"CREATE TABLE IF NOT EXISTS \"{escapedSchema}\".\"__EFMigrationsHistory\"")
+                $"CREATE TABLE \"{escapedHistoryTable}\"",
+                $"CREATE TABLE IF NOT EXISTS \"{escapedSchema}\".\"{escapedHistoryTable}\"")
             .Replace(
-                "INSERT INTO \"__EFMigrationsHistory\"",
-                $"INSERT INTO \"{escapedSchema}\".\"__EFMigrationsHistory\"");
+                $"INSERT INTO \"{escapedHistoryTable}\"",
+                $"INSERT INTO \"{escapedSchema}\".\"{escapedHistoryTable}\"");
 
         builder.Append(modifiedSql);
 
