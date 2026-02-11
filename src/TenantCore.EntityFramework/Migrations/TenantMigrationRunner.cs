@@ -177,21 +177,14 @@ public class TenantMigrationRunner<TContext, TKey>
             var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
 
-            // Get pending migrations
-            var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync(cancellationToken)).ToHashSet();
             var migrator = context.GetService<IMigrator>();
 
-            // Generate the full migration SQL script
-            var fullScript = migrator.GenerateScript();
-
-            if (string.IsNullOrWhiteSpace(fullScript))
-            {
-                _logger.LogDebug("No migrations to apply for tenant {TenantId}", tenantId);
-                return;
-            }
-
-            // Get pending migrations for logging
-            var pendingMigrations = (await context.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
+            // Determine all known migrations from the model and which are already applied
+            // in this tenant's schema-qualified history table (not EF's cached options)
+            var allMigrations = context.Database.GetMigrations().ToList();
+            var appliedMigrations = await GetAppliedMigrationsFromSchemaAsync(
+                context, schemaName, cancellationToken);
+            var pendingMigrations = allMigrations.Except(appliedMigrations).ToList();
 
             if (pendingMigrations.Count == 0)
             {
@@ -299,34 +292,99 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""{escapedHistoryTable}"" (
 
     /// <summary>
     /// Injects the tenant schema into migration SQL by:
-    /// 1. Setting search_path so unqualified names resolve to tenant schema
-    /// 2. Updating the __EFMigrationsHistory table references to be schema-qualified
+    /// 1. Removing EF-generated schema creation blocks (we handle this in setup SQL)
+    /// 2. Setting search_path so unqualified names resolve to tenant schema
+    /// 3. Replacing any schema-qualified history table references with the correct schema
     /// </summary>
     private static string InjectSchemaIntoMigrationSql(string sql, string schemaName, string migrationHistoryTable)
     {
         var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
         var escapedHistoryTable = SqlIdentifierHelper.EscapeDoubleQuotes(migrationHistoryTable);
 
-        // Build the schema-qualified SQL
-        var builder = new System.Text.StringBuilder();
+        // Remove EF-generated schema creation blocks (DO $EF$ ... END $EF$;)
+        // These reference the cached schema from DbContextOptions and are incorrect
+        // for tenants other than the first one. We create the schema in setup SQL instead.
+        var modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+            sql,
+            @"DO \$EF\$.*?END \$EF\$;\s*",
+            string.Empty,
+            System.Text.RegularExpressions.RegexOptions.Singleline);
 
-        // Set search_path so unqualified names resolve to tenant schema
+        // Replace any schema-qualified history table references.
+        // EF Core may generate these with quoted ("schema"."table") or unquoted (schema."table")
+        // schema names, depending on the provider. The schema may be stale (from a cached
+        // DbContextOptions for a different tenant), so we replace it with the correct target.
+        var escapedHistoryTableRegex = System.Text.RegularExpressions.Regex.Escape(escapedHistoryTable);
+        // Matches: optional_schema."historyTable" where schema can be quoted or unquoted
+        var historyTablePattern = $@"(?:""[^""]+""\.|\w+\.)?""{ escapedHistoryTableRegex}""";
+        var schemaQualifiedHistoryTable = $@"""{escapedSchema}"".""{escapedHistoryTable}""";
+
+        modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+            modifiedSql,
+            $@"CREATE TABLE IF NOT EXISTS\s+{historyTablePattern}",
+            $@"CREATE TABLE IF NOT EXISTS {schemaQualifiedHistoryTable}");
+
+        modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+            modifiedSql,
+            $@"CREATE TABLE\s+{historyTablePattern}",
+            $@"CREATE TABLE IF NOT EXISTS {schemaQualifiedHistoryTable}");
+
+        modifiedSql = System.Text.RegularExpressions.Regex.Replace(
+            modifiedSql,
+            $@"INSERT INTO\s+{historyTablePattern}",
+            $@"INSERT INTO {schemaQualifiedHistoryTable}");
+
+        // Build the final SQL with search_path
+        var builder = new System.Text.StringBuilder();
         builder.AppendLine($"SET search_path TO \"{escapedSchema}\", public;");
         builder.AppendLine();
-
-        // Replace migration history table references to be schema-qualified
-        // This handles both CREATE TABLE and INSERT INTO statements
-        var modifiedSql = sql
-            .Replace(
-                $"CREATE TABLE \"{escapedHistoryTable}\"",
-                $"CREATE TABLE IF NOT EXISTS \"{escapedSchema}\".\"{escapedHistoryTable}\"")
-            .Replace(
-                $"INSERT INTO \"{escapedHistoryTable}\"",
-                $"INSERT INTO \"{escapedSchema}\".\"{escapedHistoryTable}\"");
-
         builder.Append(modifiedSql);
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Queries applied migrations directly from the tenant's schema-qualified history table.
+    /// This avoids relying on EF Core's cached MigrationsHistoryTable option, which may point
+    /// to a different tenant's schema when the DbContextOptions are pooled/cached.
+    /// </summary>
+    private async Task<HashSet<string>> GetAppliedMigrationsFromSchemaAsync(
+        TContext context,
+        string schemaName,
+        CancellationToken cancellationToken)
+    {
+        var migrationHistoryTable = _contextOptions?.MigrationHistoryTable
+            ?? _options.Migrations.MigrationHistoryTable;
+        var escapedSchema = SqlIdentifierHelper.EscapeDoubleQuotes(schemaName);
+        var escapedHistoryTable = SqlIdentifierHelper.EscapeDoubleQuotes(migrationHistoryTable);
+
+        var applied = new HashSet<string>();
+
+        try
+        {
+            var connection = context.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                await connection.OpenAsync(cancellationToken);
+            }
+
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"
+                SELECT ""MigrationId"" FROM ""{escapedSchema}"".""{escapedHistoryTable}""
+                ORDER BY ""MigrationId""";
+
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                applied.Add(reader.GetString(0));
+            }
+        }
+        catch
+        {
+            // Table may not exist yet - that means no migrations are applied
+        }
+
+        return applied;
     }
 
     private async Task ExecuteWithRetryAsync(Func<Task> action, CancellationToken cancellationToken)
