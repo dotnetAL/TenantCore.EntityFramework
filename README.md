@@ -11,6 +11,7 @@ A robust, extensible multi-tenancy solution for Entity Framework Core with schem
 - **Schema-Per-Tenant Isolation**: Complete data separation at the database level
 - **Pluggable Tenant Resolution**: Multiple built-in resolvers (header, claims, subdomain, path, route, query string, API key)
 - **Control Database**: Optional centralized tenant metadata storage with status tracking, encrypted credentials, and API key authentication
+- **Multiple DbContext Support**: Register multiple tenant-aware contexts with per-context migration history tables
 - **Automatic Migration Management**: Apply migrations across all tenant schemas
 - **Full Tenant Lifecycle**: Provision, archive, restore, and delete tenants
 - **Event System**: Subscribe to tenant lifecycle events
@@ -19,6 +20,12 @@ A robust, extensible multi-tenancy solution for Entity Framework Core with schem
 
 ## Quick Start
 
+### Prerequisites
+
+- .NET 8.0+ SDK
+- PostgreSQL 12+ (running and accessible)
+- A PostgreSQL connection string (e.g., `Host=localhost;Database=myapp;Username=postgres;Password=secret`)
+
 ### Installation
 
 ```bash
@@ -26,35 +33,9 @@ dotnet add package TenantCore.EntityFramework
 dotnet add package TenantCore.EntityFramework.PostgreSql
 ```
 
-### Basic Setup
+### 1. Create a Tenant-Aware DbContext
 
-```csharp
-// Program.cs
-var builder = WebApplication.CreateBuilder(args);
-
-// Configure TenantCore
-builder.Services.AddTenantCore<string>(options =>
-{
-    options.UsePostgreSql(connectionString);
-    options.UseSchemaPerTenant(schema =>
-    {
-        schema.SchemaPrefix = "tenant_";
-    });
-});
-
-builder.Services.AddTenantCorePostgreSql();
-builder.Services.AddHeaderTenantResolver<string>();
-builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(connectionString);
-
-var app = builder.Build();
-
-// Add tenant resolution middleware
-app.UseTenantResolution<string>();
-
-app.Run();
-```
-
-### Create a Tenant-Aware DbContext
+The `TKey` type parameter represents your tenant identifier type. Supported types are `string` and `Guid`. When using the Control Database feature, `TKey` must be convertible to `Guid`.
 
 ```csharp
 public class AppDbContext : TenantDbContext<string>
@@ -71,9 +52,50 @@ public class AppDbContext : TenantDbContext<string>
 }
 ```
 
-### Provision a New Tenant
+Each tenant gets its own PostgreSQL schema. For example, a tenant with ID `"acme"` and a prefix of `"tenant_"` will have all its tables created under the `tenant_acme` schema.
+
+### 2. Register Services
 
 ```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
+
+// Configure TenantCore
+builder.Services.AddTenantCore<string>(options =>
+{
+    options.UsePostgreSql(connectionString);
+    options.UseSchemaPerTenant(schema =>
+    {
+        schema.SchemaPrefix = "tenant_";
+    });
+
+    // Exclude paths that must work without a tenant context
+    options.ExcludePaths("/api/tenants", "/health", "/swagger");
+});
+
+// Register tenant resolution (by HTTP header in this example)
+builder.Services.AddHeaderTenantResolver<string>();
+
+// Register the tenant-aware DbContext
+builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(connectionString);
+
+var app = builder.Build();
+
+// Add tenant resolution middleware
+// Place after UseAuthentication() if using claims-based resolution,
+// but before any endpoints that require tenant context.
+app.UseTenantResolution<string>();
+```
+
+> **Important:** `ExcludePaths` is required for any endpoints that operate outside a tenant context (e.g., tenant provisioning, health checks). Without it, those endpoints will fail because the middleware cannot resolve a tenant.
+
+### 3. Add Endpoints
+
+```csharp
+// Provision a new tenant (no X-Tenant-Id header needed -- path is excluded)
 app.MapPost("/api/tenants/{tenantId}", async (
     string tenantId,
     ITenantManager<string> tenantManager) =>
@@ -81,7 +103,51 @@ app.MapPost("/api/tenants/{tenantId}", async (
     await tenantManager.ProvisionTenantAsync(tenantId);
     return Results.Created($"/api/tenants/{tenantId}", new { tenantId });
 });
+
+// Tenant-scoped endpoint (X-Tenant-Id header required)
+app.MapGet("/api/products", async (AppDbContext db) =>
+{
+    var products = await db.Products.ToListAsync();
+    return Results.Ok(products);
+});
+
+app.Run();
 ```
+
+### 4. Create EF Core Migrations
+
+Because `TenantDbContext<TKey>` requires `ITenantContextAccessor` and `TenantCoreOptions` in its constructor, you need a design-time factory so that `dotnet ef migrations` commands work without the full DI container:
+
+```csharp
+public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
+{
+    public AppDbContext CreateDbContext(string[] args)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
+        optionsBuilder.UseNpgsql();
+
+        return new AppDbContext(
+            optionsBuilder.Options,
+            new DesignTimeTenantContextAccessor(),
+            new TenantCoreOptions());
+    }
+}
+
+// Minimal accessor that returns no tenant context at design time
+public class DesignTimeTenantContextAccessor : ITenantContextAccessor<string>
+{
+    public TenantContext<string>? TenantContext => null;
+    public void SetTenantContext(TenantContext<string>? context) { }
+}
+```
+
+Then generate and apply migrations:
+
+```bash
+dotnet ef migrations add Initial --context AppDbContext
+```
+
+You do not need to run `dotnet ef database update` manually. Migrations are applied per-tenant schema when you call `ProvisionTenantAsync` or use the startup migration feature.
 
 ## Tenant Resolution
 
@@ -174,6 +240,28 @@ public class MyCustomResolver : ITenantResolver<string>
 builder.Services.AddScoped<ITenantResolver<string>, MyCustomResolver>();
 ```
 
+## Shared Entities
+
+Entities that should live in a shared schema (e.g., `public`) rather than per-tenant schemas can be configured by overriding `ConfigureSharedEntities` in your DbContext:
+
+```csharp
+public class AppDbContext : TenantDbContext<string>
+{
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<GlobalConfiguration> GlobalConfigurations => Set<GlobalConfiguration>();
+
+    // ... constructor
+
+    protected override void ConfigureSharedEntities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<GlobalConfiguration>()
+            .ToTable("GlobalConfiguration", "public");
+    }
+}
+```
+
+Tables configured this way are placed in the shared schema and are accessible to all tenants.
+
 ## Migration Management
 
 ### Automatic Migrations on Startup
@@ -198,6 +286,92 @@ await tenantManager.MigrateTenantAsync("tenant1");
 // Migrate all tenants
 await tenantManager.MigrateAllTenantsAsync();
 ```
+
+## Multiple DbContexts
+
+When your application has distinct bounded contexts (e.g., products and inventory), you can register multiple tenant-aware DbContexts against the same database. Each context manages its own entities and can be migrated independently.
+
+Without per-context migration history tables, EF Core would see the other context's migrations as "unknown" in the shared `__EFMigrationsHistory` table and refuse to operate correctly. Per-context history tables solve this by giving each context its own isolated migration tracking.
+
+### Define a Second DbContext
+
+```csharp
+public class InventoryDbContext : TenantDbContext<string>
+{
+    public DbSet<Order> Orders => Set<Order>();
+
+    public InventoryDbContext(
+        DbContextOptions<InventoryDbContext> options,
+        ITenantContextAccessor<string> tenantContextAccessor,
+        TenantCoreOptions tenantOptions)
+        : base(options, tenantContextAccessor, tenantOptions)
+    {
+    }
+}
+```
+
+### Register with Per-Context Migration History Tables
+
+Each context gets its own migration history table within each tenant schema:
+
+```csharp
+// Each context tracks migrations in its own history table
+builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(
+    connectionString,
+    migrationsAssembly: "MyApp",
+    migrationHistoryTable: "__ProductMigrations");
+
+builder.Services.AddTenantDbContextPostgreSql<InventoryDbContext, string>(
+    connectionString,
+    migrationsAssembly: "MyApp",
+    migrationHistoryTable: "__InventoryMigrations");
+
+// Register a migration hosted service for each context
+builder.Services.AddTenantMigrationHostedService<AppDbContext, string>();
+builder.Services.AddTenantMigrationHostedService<InventoryDbContext, string>();
+```
+
+This produces the following structure per tenant schema:
+
+```
+tenant_acme/
+  Products              (AppDbContext)
+  Orders                (InventoryDbContext)
+  __ProductMigrations   (AppDbContext history)
+  __InventoryMigrations (InventoryDbContext history)
+```
+
+### Creating Migrations for Multiple Contexts
+
+Each context needs its own `IDesignTimeDbContextFactory` and its own migration output directory:
+
+```bash
+# AppDbContext migrations (default output directory)
+dotnet ef migrations add Initial --context AppDbContext
+
+# InventoryDbContext migrations (separate output directory)
+dotnet ef migrations add Initial --context InventoryDbContext --output-dir Migrations/Inventory
+```
+
+### Migrating Multiple Contexts
+
+Each context has its own `TenantMigrationRunner` that can be resolved from DI:
+
+```csharp
+app.MapPost("/api/tenants/{tenantId}/migrate", async (
+    string tenantId,
+    TenantMigrationRunner<AppDbContext, string> appRunner,
+    TenantMigrationRunner<InventoryDbContext, string> inventoryRunner) =>
+{
+    await appRunner.MigrateTenantAsync(tenantId);
+    await inventoryRunner.MigrateTenantAsync(tenantId);
+    return Results.Ok();
+});
+```
+
+> **Important:** `ITenantManager.ProvisionTenantAsync` only applies migrations for the primary context (the first one registered). For additional contexts, you must explicitly call their `TenantMigrationRunner<TContext, TKey>.MigrateTenantAsync` during provisioning.
+
+> **Note:** If you only have a single DbContext, you don't need to specify `migrationHistoryTable`. The default `__EFMigrationsHistory` table will be used.
 
 ## Tenant Lifecycle
 
@@ -231,7 +405,7 @@ await tenantManager.DeleteTenantAsync("tenant-id", hardDelete: true);
 
 ## Tenant Scoping
 
-Use `ITenantScopeFactory` to temporarily switch tenant context for background jobs or cross-tenant operations:
+Use `ITenantScopeFactory` to temporarily switch tenant context for background jobs or cross-tenant operations. `IDbContextFactory<TContext>` is automatically available after registering a tenant DbContext.
 
 ```csharp
 public class CrossTenantService
@@ -303,7 +477,8 @@ public class TenantEventHandler : ITenantEventSubscriber<string>
         return Task.CompletedTask;
     }
 
-    // ... other event handlers
+    // Also implement: OnTenantDeletedAsync, OnTenantArchivedAsync,
+    // OnTenantRestoredAsync, OnMigrationAppliedAsync, OnTenantResolvedAsync
 }
 
 builder.Services.AddTenantEventSubscriber<string, TenantEventHandler>();
@@ -417,6 +592,9 @@ builder.Services.AddTenantCore<string>(options =>
     options.OnTenantNotFound(TenantNotFoundBehavior.Throw);
     options.EnableCaching(TimeSpan.FromMinutes(5));
     options.DisableTenantValidation();
+
+    // Exclude paths from tenant resolution
+    options.ExcludePaths("/api/tenants", "/health", "/swagger");
 });
 ```
 
@@ -430,37 +608,13 @@ builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(
     migrationsAssembly: "MyApp.Infrastructure");
 ```
 
-## Shared Entities
-
-Mark entities that should not be tenant-isolated:
-
-```csharp
-[SharedEntity]
-public class GlobalConfiguration
-{
-    public int Id { get; set; }
-    public string Key { get; set; }
-    public string Value { get; set; }
-}
-```
-
-Or use fluent configuration:
-
-```csharp
-protected override void ConfigureSharedEntities(ModelBuilder modelBuilder)
-{
-    modelBuilder.Entity<GlobalConfiguration>()
-        .ToTable("GlobalConfiguration", "public");
-}
-```
-
 ## Supported Databases
 
 | Database   | Package                              | Status |
 |------------|--------------------------------------|--------|
-| PostgreSQL | TenantCore.EntityFramework.PostgreSql | ✅ Supported |
-| SQL Server | TenantCore.EntityFramework.SqlServer | 🔜 Planned |
-| MySQL      | TenantCore.EntityFramework.MySql     | 🔜 Planned |
+| PostgreSQL | TenantCore.EntityFramework.PostgreSql | Supported |
+| SQL Server | TenantCore.EntityFramework.SqlServer | Planned |
+| MySQL      | TenantCore.EntityFramework.MySql     | Planned |
 
 ## Sample Project
 
@@ -468,6 +622,7 @@ A complete sample Web API is included in the `samples/TenantCore.Sample.WebApi` 
 
 - Tenant provisioning and management endpoints
 - Tenant-scoped CRUD operations
+- Multiple DbContexts with per-context migration history tables (`ApplicationDbContext` + `InventoryDbContext`)
 - Health check configuration
 - Swagger/OpenAPI integration
 - Optional Control Database integration
@@ -490,6 +645,14 @@ dotnet run -- --TenantCore:UseControlDatabase=true
 - .NET 8.0 or .NET 10.0
 - Entity Framework Core 8.x or 10.x
 - PostgreSQL 12+ (for PostgreSQL provider)
+
+## Troubleshooting
+
+**Migrations fail at design time** (`Unable to create an instance of 'AppDbContext'`): You need an `IDesignTimeDbContextFactory<TContext>` for each DbContext. See [Creating EF Core Migrations](#4-create-ef-core-migrations) above.
+
+**Tenant provisioning endpoint returns a tenant-not-found error**: Add the provisioning path to `ExcludePaths` so it bypasses tenant resolution. See the `options.ExcludePaths(...)` call in the Quick Start.
+
+**Second DbContext migrations are not applied when provisioning**: `ProvisionTenantAsync` only migrates the primary (first-registered) context. Call `TenantMigrationRunner<TContext, TKey>.MigrateTenantAsync` explicitly for each additional context.
 
 ## License
 
