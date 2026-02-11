@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TenantCore.EntityFramework.Configuration;
@@ -14,22 +15,22 @@ public class TenantMigrationHostedService<TContext, TKey> : IHostedService
     where TContext : TenantDbContext<TKey>
     where TKey : notnull
 {
-    private readonly TenantMigrationRunner<TContext, TKey> _migrationRunner;
+    private readonly IServiceProvider _serviceProvider;
     private readonly TenantCoreOptions _options;
     private readonly ILogger<TenantMigrationHostedService<TContext, TKey>> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TenantMigrationHostedService{TContext, TKey}"/> class.
     /// </summary>
-    /// <param name="migrationRunner">The migration runner.</param>
+    /// <param name="serviceProvider">The service provider for creating scopes.</param>
     /// <param name="options">The tenant configuration options.</param>
     /// <param name="logger">The logger instance.</param>
     public TenantMigrationHostedService(
-        TenantMigrationRunner<TContext, TKey> migrationRunner,
+        IServiceProvider serviceProvider,
         TenantCoreOptions options,
         ILogger<TenantMigrationHostedService<TContext, TKey>> logger)
     {
-        _migrationRunner = migrationRunner;
+        _serviceProvider = serviceProvider;
         _options = options;
         _logger = logger;
     }
@@ -43,16 +44,19 @@ public class TenantMigrationHostedService<TContext, TKey> : IHostedService
             return;
         }
 
-        _logger.LogInformation("Applying migrations to all tenants on startup");
+        _logger.LogInformation("Applying {Context} migrations to all tenants on startup", typeof(TContext).Name);
 
         try
         {
-            await _migrationRunner.MigrateAllTenantsAsync(cancellationToken);
-            _logger.LogInformation("Startup migration completed successfully");
+            using var scope = _serviceProvider.CreateScope();
+            var migrationRunner = scope.ServiceProvider
+                .GetRequiredService<TenantMigrationRunner<TContext, TKey>>();
+            await migrationRunner.MigrateAllTenantsAsync(cancellationToken);
+            _logger.LogInformation("Startup migration for {Context} completed successfully", typeof(TContext).Name);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to apply migrations on startup");
+            _logger.LogError(ex, "Failed to apply {Context} migrations on startup", typeof(TContext).Name);
             throw;
         }
     }

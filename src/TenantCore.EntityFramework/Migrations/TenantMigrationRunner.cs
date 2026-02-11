@@ -198,10 +198,16 @@ public class TenantMigrationRunner<TContext, TKey>
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(_options.Migrations.Timeout);
 
+            // Determine the last applied migration (used as fromMigration for GenerateScript).
+            // Use the already-queried appliedMigrations rather than re-querying the history table,
+            // since the applied set may have come from a legacy/renamed history table.
+            var lastAppliedMigration = allMigrations
+                .LastOrDefault(m => appliedMigrations.Contains(m));
+
             await ExecuteWithRetryAsync(async () =>
             {
                 // Inject schema into the migration SQL and execute
-                await ApplyMigrationWithSchemaAsync(context, schemaName, pendingMigrations, cts.Token);
+                await ApplyMigrationWithSchemaAsync(context, schemaName, pendingMigrations, lastAppliedMigration, cts.Token);
             }, cancellationToken);
 
             foreach (var migration in pendingMigrations)
@@ -226,6 +232,7 @@ public class TenantMigrationRunner<TContext, TKey>
         TContext context,
         string schemaName,
         List<string> pendingMigrations,
+        string? lastAppliedMigration,
         CancellationToken cancellationToken)
     {
         var migrator = context.GetService<IMigrator>();
@@ -245,28 +252,6 @@ CREATE TABLE IF NOT EXISTS ""{escapedSchema}"".""{escapedHistoryTable}"" (
 );";
 
         await context.Database.ExecuteSqlRawAsync(setupSql, cancellationToken);
-
-        // Get the last applied migration (if any) - need to query the tenant's history table
-        string? lastAppliedMigration = null;
-        try
-        {
-            var connection = context.Database.GetDbConnection();
-            if (connection.State != System.Data.ConnectionState.Open)
-            {
-                await connection.OpenAsync(cancellationToken);
-            }
-
-            await using var cmd = connection.CreateCommand();
-            cmd.CommandText = $@"
-                SELECT ""MigrationId"" FROM ""{escapedSchema}"".""{escapedHistoryTable}""
-                ORDER BY ""MigrationId"" DESC LIMIT 1";
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
-            lastAppliedMigration = result as string;
-        }
-        catch
-        {
-            // Table might not exist or be empty - that's fine
-        }
 
         // Generate SQL only for migrations after the last applied one
         var sql = migrator.GenerateScript(

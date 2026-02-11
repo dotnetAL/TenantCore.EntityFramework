@@ -74,6 +74,11 @@ builder.Services.AddTenantDbContextPostgreSql<InventoryDbContext, string>(
     migrationsAssembly: "TenantCore.Sample.WebApi",
     migrationHistoryTable: "__InventoryMigrations");
 
+// Register startup migration hosted services for both contexts
+// When ApplyOnStartup is true, these apply pending migrations to all existing tenants at startup
+builder.Services.AddTenantMigrationHostedService<ApplicationDbContext, string>();
+builder.Services.AddTenantMigrationHostedService<InventoryDbContext, string>();
+
 // Add health checks
 builder.Services.AddTenantHealthChecks<ApplicationDbContext, string>("tenants");
 
@@ -122,11 +127,18 @@ app.MapHealthChecks("/health");
 // Tenant management endpoints
 app.MapPost("/api/tenants/{tenantId}", async (
     string tenantId,
-    ITenantManager<string> tenantManager) =>
+    ITenantManager<string> tenantManager,
+    ITenantContextAccessor<string> accessor,
+    IServiceProvider sp) =>
 {
     try
     {
+        // Provision creates the schema and applies ApplicationDbContext migrations
         await tenantManager.ProvisionTenantAsync(tenantId);
+
+        // Also apply InventoryDbContext migrations to the same tenant schema
+        await accessor.MigrateTenantAsync<InventoryDbContext, string>(tenantId, sp);
+
         return Results.Created($"/api/tenants/{tenantId}", new { tenantId, message = "Tenant created successfully" });
     }
     catch (TenantAlreadyExistsException)
