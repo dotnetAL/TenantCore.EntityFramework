@@ -118,7 +118,7 @@ public class TenantMiddlewareTests
     }
 
     [Fact]
-    public async Task NonExcludedPath_WithoutTenantHeader_ShouldThrow()
+    public async Task NonExcludedPath_WithoutTenantHeader_ShouldReturn403()
     {
         // Arrange
         using var host = CreateTestHost(options =>
@@ -129,11 +129,11 @@ public class TenantMiddlewareTests
         await host.StartAsync();
         var client = host.GetTestClient();
 
-        // Act & Assert
-        await Assert.ThrowsAsync<TenantNotFoundException>(async () =>
-        {
-            await client.GetAsync("/api/products");
-        });
+        // Act
+        var response = await client.GetAsync("/api/products");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -259,17 +259,17 @@ public class TenantMiddlewareTests
     }
 
     [Fact]
-    public async Task NoExcludedPaths_WithoutTenantHeader_ShouldThrow()
+    public async Task NoExcludedPaths_WithoutTenantHeader_ShouldReturn403()
     {
         // Arrange - no paths excluded
         using var host = CreateTestHost();
         await host.StartAsync();
         var client = host.GetTestClient();
 
-        // Act & Assert - all paths should require tenant
-        await Assert.ThrowsAsync<TenantNotFoundException>(async () =>
-        {
-            await client.GetAsync("/api/tenants");
-        });
+        // Act - all paths should require tenant
+        var response = await client.GetAsync("/api/tenants");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 }

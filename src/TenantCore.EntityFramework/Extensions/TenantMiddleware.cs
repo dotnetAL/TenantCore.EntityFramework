@@ -53,6 +53,12 @@ public class TenantMiddleware<TKey> where TKey : notnull
             // Handle based on configuration
             await _next(context);
         }
+        catch (TenantNotFoundException)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"error\":\"Access denied\"}", context.RequestAborted);
+        }
     }
 
     private static bool IsPathExcluded(PathString path, List<string> excludedPaths)

@@ -10,6 +10,7 @@ using TenantCore.EntityFramework.Events;
 using TenantCore.EntityFramework.Lifecycle;
 using TenantCore.EntityFramework.Migrations;
 using TenantCore.EntityFramework.Resolvers;
+using TenantCore.EntityFramework.Validators;
 
 namespace TenantCore.EntityFramework.Extensions;
 
@@ -361,6 +362,25 @@ public static class ServiceCollectionExtensions
             services.AddHostedService<ControlDbMigrationHostedService>();
         }
 
+        return services;
+    }
+
+    /// <summary>
+    /// Adds a schema-exists tenant validator that checks whether the tenant's schema
+    /// actually exists in the database. When a control database is available,
+    /// it also verifies the tenant status is Active.
+    /// </summary>
+    /// <typeparam name="TContext">The DbContext type used for database access.</typeparam>
+    /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddSchemaExistsTenantValidator<TContext, TKey>(
+        this IServiceCollection services)
+        where TContext : TenantDbContext<TKey>
+        where TKey : notnull
+    {
+        services.AddMemoryCache();
+        services.TryAddScoped<ITenantValidator<TKey>, SchemaExistsTenantValidator<TContext, TKey>>();
         return services;
     }
 
