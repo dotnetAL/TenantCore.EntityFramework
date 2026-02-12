@@ -16,6 +16,7 @@ A robust, extensible multi-tenancy solution for Entity Framework Core with schem
 - **Full Tenant Lifecycle**: Provision, archive, restore, and delete tenants
 - **Event System**: Subscribe to tenant lifecycle events
 - **Health Checks**: Monitor tenant database health
+- **Tenant Validation**: Built-in schema-exists validator rejects unknown tenant IDs with a 403 before they hit the database
 - **Extensible Architecture**: Add custom strategies, resolvers, and seeders
 
 ## Quick Start
@@ -78,6 +79,9 @@ builder.Services.AddTenantCore<string>(options =>
 
 // Register tenant resolution (by HTTP header in this example)
 builder.Services.AddHeaderTenantResolver<string>();
+
+// Validate that the tenant's schema exists before allowing access
+builder.Services.AddSchemaExistsTenantValidator<AppDbContext, string>();
 
 // Register the tenant-aware DbContext
 builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(connectionString);
@@ -238,6 +242,33 @@ public class MyCustomResolver : ITenantResolver<string>
 
 // Register
 builder.Services.AddScoped<ITenantResolver<string>, MyCustomResolver>();
+```
+
+## Tenant Validation
+
+By default, any string passed in the `X-Tenant-Id` header is accepted as a tenant ID. If the corresponding schema doesn't exist, the request fails with a raw database error. To prevent this, register the built-in schema-exists validator:
+
+```csharp
+builder.Services.AddSchemaExistsTenantValidator<AppDbContext, string>();
+```
+
+This checks whether the tenant's schema actually exists in the database before the request reaches your endpoints. When a control database is also configured, it additionally verifies the tenant's status is `Active`.
+
+Invalid or unknown tenant IDs receive an HTTP **403 Forbidden** response. Validated results are cached (default: 5 minutes) to avoid repeated database lookups.
+
+You can also implement a custom validator:
+
+```csharp
+public class MyTenantValidator : ITenantValidator<string>
+{
+    public Task<bool> ValidateTenantAsync(string tenantId, CancellationToken ct = default)
+    {
+        // Your custom validation logic
+        return Task.FromResult(true);
+    }
+}
+
+builder.Services.AddScoped<ITenantValidator<string>, MyTenantValidator>();
 ```
 
 ## Shared Entities
@@ -651,6 +682,8 @@ dotnet run -- --TenantCore:UseControlDatabase=true
 **Migrations fail at design time** (`Unable to create an instance of 'AppDbContext'`): You need an `IDesignTimeDbContextFactory<TContext>` for each DbContext. See [Creating EF Core Migrations](#4-create-ef-core-migrations) above.
 
 **Tenant provisioning endpoint returns a tenant-not-found error**: Add the provisioning path to `ExcludePaths` so it bypasses tenant resolution. See the `options.ExcludePaths(...)` call in the Quick Start.
+
+**Unknown tenant ID causes a raw database error (e.g., `42P01: relation "tenant_unknown.Products" does not exist`)**: Register the schema-exists validator with `AddSchemaExistsTenantValidator<TContext, TKey>()`. This rejects unknown tenants with a 403 before any database query runs.
 
 **Second DbContext migrations are not applied when provisioning**: `ProvisionTenantAsync` only migrates the primary (first-registered) context. Call `TenantMigrationRunner<TContext, TKey>.MigrateTenantAsync` explicitly for each additional context.
 
