@@ -366,21 +366,24 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Adds a schema-exists tenant validator that checks whether the tenant's schema
-    /// actually exists in the database. When a control database is available,
-    /// it also verifies the tenant status is Active.
+    /// Adds a tenant validator that checks whether the tenant's schema exists in the
+    /// database and, when a control database is available, verifies the tenant status
+    /// is Active.
     /// </summary>
     /// <typeparam name="TContext">The DbContext type used for database access.</typeparam>
     /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
     /// <param name="services">The service collection.</param>
     /// <returns>The service collection for chaining.</returns>
-    public static IServiceCollection AddSchemaExistsTenantValidator<TContext, TKey>(
+    public static IServiceCollection AddActiveTenantExistsValidator<TContext, TKey>(
         this IServiceCollection services)
         where TContext : TenantDbContext<TKey>
         where TKey : notnull
     {
+        // Ensure memory cache is available for the pipeline's validation result caching
         services.AddMemoryCache();
-        services.TryAddScoped<ITenantValidator<TKey>, SchemaExistsTenantValidator<TContext, TKey>>();
+        // Replace any existing validator (e.g., one registered via UseTenantValidator<T>())
+        services.RemoveAll<ITenantValidator<TKey>>();
+        services.AddScoped<ITenantValidator<TKey>, ActiveTenantExistsValidator<TContext, TKey>>();
         return services;
     }
 

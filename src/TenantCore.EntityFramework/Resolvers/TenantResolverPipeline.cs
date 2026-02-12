@@ -72,7 +72,7 @@ public class TenantResolverPipeline<TKey> : ITenantResolverPipeline<TKey> where 
                         if (!isValid)
                         {
                             _logger.LogWarning("Tenant {TenantId} validation failed", tenantId);
-                            continue;
+                            return HandleTenantNotFound();
                         }
                     }
 
@@ -113,9 +113,10 @@ public class TenantResolverPipeline<TKey> : ITenantResolverPipeline<TKey> where 
 
         var isValid = await _validator.ValidateTenantAsync(tenantId, cancellationToken);
 
-        if (_options.EnableTenantCaching && _cache != null)
+        // Only cache positive results to avoid locking out newly provisioned tenants
+        if (isValid && _options.EnableTenantCaching && _cache != null)
         {
-            _cache.Set(cacheKey, isValid, _options.TenantCacheDuration);
+            _cache.Set(cacheKey, true, _options.TenantCacheDuration);
         }
 
         return isValid;

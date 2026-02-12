@@ -9,12 +9,16 @@ using TenantCore.EntityFramework.ControlDb;
 namespace TenantCore.EntityFramework.Validators;
 
 /// <summary>
-/// Validates that a tenant's schema exists in the database.
-/// When a control database is available, also verifies the tenant status is Active.
+/// Validates that a tenant exists and is active by checking that its schema exists
+/// in the database. When a control database is available, also verifies the tenant
+/// status is Active
+/// by looking up the tenant record using <c>tenantId.ToString()</c> as the slug.
+/// This assumes the slug matches the string representation of the tenant ID,
+/// which is the default when tenants are provisioned via <c>ProvisionTenantAsync</c>.
 /// </summary>
 /// <typeparam name="TContext">The DbContext type used to access the database.</typeparam>
 /// <typeparam name="TKey">The type of the tenant identifier.</typeparam>
-public class SchemaExistsTenantValidator<TContext, TKey> : ITenantValidator<TKey>
+public class ActiveTenantExistsValidator<TContext, TKey> : ITenantValidator<TKey>
     where TContext : TenantDbContext<TKey>
     where TKey : notnull
 {
@@ -22,21 +26,21 @@ public class SchemaExistsTenantValidator<TContext, TKey> : ITenantValidator<TKey
     private readonly ISchemaManager _schemaManager;
     private readonly TenantCoreOptions _options;
     private readonly ITenantStore? _tenantStore;
-    private readonly ILogger<SchemaExistsTenantValidator<TContext, TKey>> _logger;
+    private readonly ILogger<ActiveTenantExistsValidator<TContext, TKey>> _logger;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SchemaExistsTenantValidator{TContext, TKey}"/> class.
+    /// Initializes a new instance of the <see cref="ActiveTenantExistsValidator{TContext, TKey}"/> class.
     /// </summary>
     /// <param name="serviceProvider">The service provider for creating scoped services.</param>
     /// <param name="schemaManager">The schema manager for checking schema existence.</param>
     /// <param name="options">The tenant configuration options.</param>
     /// <param name="logger">The logger instance.</param>
     /// <param name="tenantStore">Optional tenant store for control database validation.</param>
-    public SchemaExistsTenantValidator(
+    public ActiveTenantExistsValidator(
         IServiceProvider serviceProvider,
         ISchemaManager schemaManager,
         TenantCoreOptions options,
-        ILogger<SchemaExistsTenantValidator<TContext, TKey>> logger,
+        ILogger<ActiveTenantExistsValidator<TContext, TKey>> logger,
         ITenantStore? tenantStore = null)
     {
         _serviceProvider = serviceProvider;

@@ -12,21 +12,21 @@ using Xunit;
 
 namespace TenantCore.EntityFramework.Tests.Validators;
 
-public class SchemaExistsTenantValidatorTests
+public class ActiveTenantExistsValidatorTests
 {
     private readonly Mock<ISchemaManager> _schemaManager;
     private readonly TenantCoreOptions _options;
-    private readonly Mock<ILogger<SchemaExistsTenantValidator<TestDbContext, string>>> _logger;
+    private readonly Mock<ILogger<ActiveTenantExistsValidator<TestDbContext, string>>> _logger;
 
-    public SchemaExistsTenantValidatorTests()
+    public ActiveTenantExistsValidatorTests()
     {
         _schemaManager = new Mock<ISchemaManager>();
         _options = new TenantCoreOptions();
         _options.SchemaPerTenant.SchemaPrefix = "tenant_";
-        _logger = new Mock<ILogger<SchemaExistsTenantValidator<TestDbContext, string>>>();
+        _logger = new Mock<ILogger<ActiveTenantExistsValidator<TestDbContext, string>>>();
     }
 
-    private SchemaExistsTenantValidator<TestDbContext, string> CreateValidator(
+    private ActiveTenantExistsValidator<TestDbContext, string> CreateValidator(
         ITenantStore? tenantStore = null)
     {
         var services = new ServiceCollection();
@@ -37,7 +37,7 @@ public class SchemaExistsTenantValidatorTests
 
         var serviceProvider = services.BuildServiceProvider();
 
-        return new SchemaExistsTenantValidator<TestDbContext, string>(
+        return new ActiveTenantExistsValidator<TestDbContext, string>(
             serviceProvider,
             _schemaManager.Object,
             _options,
@@ -147,6 +147,47 @@ public class SchemaExistsTenantValidatorTests
 
         // Assert
         result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ValidateTenantAsync_SchemaCheckThrows_PropagatesException()
+    {
+        // Arrange
+        _schemaManager
+            .Setup(x => x.SchemaExistsAsync(It.IsAny<DbContext>(), "tenant_acme", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Database connection failed"));
+
+        var validator = CreateValidator();
+
+        // Act
+        var act = () => validator.ValidateTenantAsync("acme");
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Database connection failed");
+    }
+
+    [Fact]
+    public async Task ValidateTenantAsync_TenantStoreThrows_PropagatesException()
+    {
+        // Arrange
+        _schemaManager
+            .Setup(x => x.SchemaExistsAsync(It.IsAny<DbContext>(), "tenant_acme", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var tenantStore = new Mock<ITenantStore>();
+        tenantStore
+            .Setup(x => x.GetTenantBySlugAsync("acme", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Control database unavailable"));
+
+        var validator = CreateValidator(tenantStore.Object);
+
+        // Act
+        var act = () => validator.ValidateTenantAsync("acme");
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Control database unavailable");
     }
 
     /// <summary>

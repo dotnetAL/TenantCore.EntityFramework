@@ -43,8 +43,8 @@ builder.Services.AddTenantCorePostgreSql();
 // Add HTTP tenant resolver (from X-Tenant-Id header)
 builder.Services.AddHeaderTenantResolver<string>();
 
-// Add schema-exists validator to reject unknown tenant IDs with a clean error
-builder.Services.AddSchemaExistsTenantValidator<ApplicationDbContext, string>();
+// Validate that the tenant exists and is active before allowing access
+builder.Services.AddActiveTenantExistsValidator<ApplicationDbContext, string>();
 
 // Optional: Add control database for centralized tenant metadata
 // Enable by setting TenantCore:UseControlDatabase=true in configuration

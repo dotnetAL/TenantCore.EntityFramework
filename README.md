@@ -80,8 +80,8 @@ builder.Services.AddTenantCore<string>(options =>
 // Register tenant resolution (by HTTP header in this example)
 builder.Services.AddHeaderTenantResolver<string>();
 
-// Validate that the tenant's schema exists before allowing access
-builder.Services.AddSchemaExistsTenantValidator<AppDbContext, string>();
+// Validate that the tenant exists and is active before allowing access
+builder.Services.AddActiveTenantExistsValidator<AppDbContext, string>();
 
 // Register the tenant-aware DbContext
 builder.Services.AddTenantDbContextPostgreSql<AppDbContext, string>(connectionString);
@@ -246,10 +246,10 @@ builder.Services.AddScoped<ITenantResolver<string>, MyCustomResolver>();
 
 ## Tenant Validation
 
-By default, any string passed in the `X-Tenant-Id` header is accepted as a tenant ID. If the corresponding schema doesn't exist, the request fails with a raw database error. To prevent this, register the built-in schema-exists validator:
+By default, any string passed in the `X-Tenant-Id` header is accepted as a tenant ID. If the corresponding schema doesn't exist, the request fails with a raw database error. To prevent this, register the built-in active-tenant validator:
 
 ```csharp
-builder.Services.AddSchemaExistsTenantValidator<AppDbContext, string>();
+builder.Services.AddActiveTenantExistsValidator<AppDbContext, string>();
 ```
 
 This checks whether the tenant's schema actually exists in the database before the request reaches your endpoints. When a control database is also configured, it additionally verifies the tenant's status is `Active`.
@@ -683,7 +683,7 @@ dotnet run -- --TenantCore:UseControlDatabase=true
 
 **Tenant provisioning endpoint returns a tenant-not-found error**: Add the provisioning path to `ExcludePaths` so it bypasses tenant resolution. See the `options.ExcludePaths(...)` call in the Quick Start.
 
-**Unknown tenant ID causes a raw database error (e.g., `42P01: relation "tenant_unknown.Products" does not exist`)**: Register the schema-exists validator with `AddSchemaExistsTenantValidator<TContext, TKey>()`. This rejects unknown tenants with a 403 before any database query runs.
+**Unknown tenant ID causes a raw database error (e.g., `42P01: relation "tenant_unknown.Products" does not exist`)**: Register the active-tenant validator with `AddActiveTenantExistsValidator<TContext, TKey>()`. This rejects unknown tenants with a 403 before any database query runs.
 
 **Second DbContext migrations are not applied when provisioning**: `ProvisionTenantAsync` only migrates the primary (first-registered) context. Call `TenantMigrationRunner<TContext, TKey>.MigrateTenantAsync` explicitly for each additional context.
 
