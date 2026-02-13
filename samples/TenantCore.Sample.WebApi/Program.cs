@@ -192,9 +192,26 @@ app.MapGet("/api/tenant-info", async (ICurrentTenantRecordAccessor recordAccesso
     return record != null ? Results.Ok(record) : Results.NotFound();
 })
 .WithName("GetTenantInfo")
-.WithTags("Tenant Info")
+.WithTags("Tenant Info (Tenant-Scoped)")
 .WithDescription("Get the current tenant's record from the control database. Requires X-Tenant-Id header and control database enabled.")
-.WithOpenApi();
+.WithOpenApi(operation =>
+{
+    operation.Security.Add(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "TenantId"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+    return operation;
+});
 
 // Product endpoints (tenant-scoped) - require X-Tenant-Id header
 var productEndpoints = app.MapGroup("/api/products")
