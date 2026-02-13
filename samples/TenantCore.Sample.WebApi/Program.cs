@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Context;
+using TenantCore.EntityFramework.ControlDb;
 using TenantCore.EntityFramework.Extensions;
 using TenantCore.EntityFramework.Migrations;
 using TenantCore.EntityFramework.PostgreSql;
@@ -182,6 +183,17 @@ app.MapDelete("/api/tenants/{tenantId}", async (
 .WithName("DeleteTenant")
 .WithTags("Tenant Management")
 .WithDescription("Delete a tenant. Use hardDelete=true to permanently remove all data.")
+.WithOpenApi();
+
+// Tenant info endpoint - demonstrates ICurrentTenantRecordAccessor (requires control database)
+app.MapGet("/api/tenant-info", async (ICurrentTenantRecordAccessor recordAccessor) =>
+{
+    var record = await recordAccessor.GetCurrentTenantRecordAsync();
+    return record != null ? Results.Ok(record) : Results.NotFound();
+})
+.WithName("GetTenantInfo")
+.WithTags("Tenant Info")
+.WithDescription("Get the current tenant's record from the control database. Requires X-Tenant-Id header and control database enabled.")
 .WithOpenApi();
 
 // Product endpoints (tenant-scoped) - require X-Tenant-Id header

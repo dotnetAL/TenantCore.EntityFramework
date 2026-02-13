@@ -76,6 +76,9 @@ public static class ServiceCollectionExtensions
         // Events
         services.TryAddSingleton<ITenantEventPublisher<TKey>, TenantEventPublisher<TKey>>();
 
+        // Current tenant record accessor (lazy-loading, per-request cached)
+        services.TryAddScoped<ICurrentTenantRecordAccessor, CurrentTenantRecordAccessor<TKey>>();
+
         return services;
     }
 

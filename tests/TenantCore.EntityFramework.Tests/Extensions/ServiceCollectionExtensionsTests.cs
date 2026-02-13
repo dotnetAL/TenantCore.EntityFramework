@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using TenantCore.EntityFramework.Abstractions;
 using TenantCore.EntityFramework.Context;
+using TenantCore.EntityFramework.ControlDb;
 using TenantCore.EntityFramework.Extensions;
 using Xunit;
 
@@ -154,6 +155,27 @@ public class ServiceCollectionExtensionsTests
 
         // Assert
         accessor1.Should().BeSameAs(accessor2);
+    }
+
+    [Fact]
+    public void AddTenantCore_RegistersCurrentTenantRecordAccessor()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddTenantCore<string>(options =>
+        {
+            options.UseSchemaPerTenant();
+        });
+
+        var provider = services.BuildServiceProvider();
+
+        // Act
+        using var scope = provider.CreateScope();
+        var accessor = scope.ServiceProvider.GetService<ICurrentTenantRecordAccessor>();
+
+        // Assert
+        accessor.Should().NotBeNull();
+        accessor.Should().BeOfType<CurrentTenantRecordAccessor<string>>();
     }
 
     [Fact]
