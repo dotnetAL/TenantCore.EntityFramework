@@ -115,6 +115,16 @@ app.MapGet("/api/products", async (AppDbContext db) =>
     return Results.Ok(products);
 });
 
+// Admin endpoint -- access a specific tenant without middleware
+app.MapGet("/api/tenants/{tenantId}/products", async (
+    string tenantId,
+    IServiceProvider sp) =>
+{
+    await using var scope = await sp.GetTenantDbContextAsync<AppDbContext, string>(tenantId);
+    var products = await scope.Context.Products.ToListAsync();
+    return Results.Ok(products);
+});
+
 app.Run();
 ```
 
@@ -436,7 +446,21 @@ await tenantManager.DeleteTenantAsync("tenant-id", hardDelete: true);
 
 ## Tenant Scoping
 
-Use `ITenantScopeFactory` to temporarily switch tenant context for background jobs or cross-tenant operations. `IDbContextFactory<TContext>` is automatically available after registering a tenant DbContext.
+### One-liner: `IServiceProvider.GetTenantDbContextAsync`
+
+The simplest way to get a tenant-scoped DbContext — ideal for admin endpoints, background services, and cross-tenant operations:
+
+```csharp
+await using var scope = await sp.GetTenantDbContextAsync<AppDbContext, string>(tenantId);
+var products = await scope.Context.Products.ToListAsync();
+// Disposing the scope disposes the DbContext and restores the previous tenant context.
+```
+
+The returned `TenantDbContextScope<TContext>` is `IAsyncDisposable`. It sets up the tenant context, computes the schema name from `TenantCoreOptions`, and creates the DbContext via the registered factory. On dispose it cleans up both the DbContext and the tenant context automatically.
+
+### Advanced: `ITenantScopeFactory` + `IDbContextFactory`
+
+For scenarios where you need to control the scope and factory independently (e.g., creating multiple DbContexts within the same tenant scope), use `ITenantScopeFactory` with `IDbContextFactory<TContext>`:
 
 ```csharp
 public class CrossTenantService
