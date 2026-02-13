@@ -326,16 +326,10 @@ app.MapPost("/api/tenants/{tenantId}/migrate", async (
 // Admin endpoint to get products for a specific tenant
 app.MapGet("/api/tenants/{tenantId}/products", async (
     string tenantId,
-    ITenantContextAccessor<string> accessor,
     IServiceProvider sp) =>
 {
-    using var scope = new TenantScope<string>(
-        accessor,
-        tenantId,
-        $"tenant_{tenantId}");
-
-    await using var context = await accessor.GetTenantDbContextAsync<ApplicationDbContext, string>(sp);
-    var products = await context.Products.ToListAsync();
+    await using var scope = await sp.GetTenantDbContextAsync<ApplicationDbContext, string>(tenantId);
+    var products = await scope.Context.Products.ToListAsync();
     return Results.Ok(products);
 })
 .WithName("GetTenantProducts")
